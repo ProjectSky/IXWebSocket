@@ -12,6 +12,7 @@
 #include "IXSocketMbedTLS.h"
 
 #include "IXNetSystem.h"
+#include "IXProxyConnect.h"
 #include "IXSocket.h"
 #include "IXSocketConnect.h"
 #include <cstdint>
@@ -266,8 +267,24 @@ namespace ix
     {
         {
             std::lock_guard<std::mutex> lock(_mutex);
-            _sockfd = SocketConnect::connect(host, port, errMsg, isCancellationRequested);
-            if (_sockfd == -1) return false;
+            if (_proxyConfig.isEnabled())
+            {
+                _sockfd = SocketConnect::connect(_proxyConfig.host, _proxyConfig.port,
+                                                 errMsg, isCancellationRequested);
+                if (_sockfd == -1) return false;
+
+                if (!ProxyConnect::connect(_sockfd, _proxyConfig, host, port,
+                                           errMsg, isCancellationRequested))
+                {
+                    close();
+                    return false;
+                }
+            }
+            else
+            {
+                _sockfd = SocketConnect::connect(host, port, errMsg, isCancellationRequested);
+                if (_sockfd == -1) return false;
+            }
         }
 
         bool isClient = true;

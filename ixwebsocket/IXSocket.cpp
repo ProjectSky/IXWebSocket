@@ -7,11 +7,13 @@
 #include "IXSocket.h"
 
 #include "IXNetSystem.h"
+#include "IXProxyConnect.h"
 #include "IXSelectInterrupt.h"
 #include "IXSelectInterruptFactory.h"
 #include "IXSocketConnect.h"
 #include <algorithm>
 #include <array>
+#include <optional>
 #include <assert.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -226,8 +228,41 @@ namespace ix
 
         if (!_selectInterrupt->clear()) return false;
 
+        if (_proxyConfig.isEnabled())
+        {
+            return connectThroughProxy(host, port, errMsg, isCancellationRequested);
+        }
+
         _sockfd = SocketConnect::connect(host, port, errMsg, isCancellationRequested);
         return _sockfd != -1;
+    }
+
+    bool Socket::connectThroughProxy(const std::string& host,
+                                     int port,
+                                     std::string& errMsg,
+                                     const CancellationRequest& isCancellationRequested)
+    {
+        _sockfd = SocketConnect::connect(_proxyConfig.host, _proxyConfig.port,
+                                         errMsg, isCancellationRequested);
+        if (_sockfd == -1) return false;
+
+        if (!ProxyConnect::connect(_sockfd, _proxyConfig, host, port,
+                                   errMsg, isCancellationRequested))
+        {
+            close();
+            return false;
+        }
+        return true;
+    }
+
+    void Socket::setProxyConfig(const ProxyConfig& proxyConfig)
+    {
+        _proxyConfig = proxyConfig;
+    }
+
+    const ProxyConfig& Socket::getProxyConfig() const
+    {
+        return _proxyConfig;
     }
 
     void Socket::close()
@@ -238,6 +273,11 @@ namespace ix
 
         closeSocket(_sockfd);
         _sockfd = -1;
+    }
+
+    bool Socket::isOpen() const
+    {
+        return _sockfd != -1;
     }
 
     ssize_t Socket::send(char* buffer, size_t length)
@@ -375,7 +415,7 @@ namespace ix
         }
     }
 
-    std::pair<bool, std::string> Socket::readLine(
+    std::optional<std::string> Socket::readLine(
         const CancellationRequest& isCancellationRequested)
     {
         char c;
@@ -386,17 +426,16 @@ namespace ix
         {
             if (!readByte(&c, isCancellationRequested))
             {
-                // Return what we were able to read
-                return std::make_pair(false, line);
+                return std::nullopt;
             }
 
             line += c;
         }
 
-        return std::make_pair(true, line);
+        return line;
     }
 
-    std::pair<bool, std::string> Socket::readBytes(
+    std::optional<std::string> Socket::readBytes(
         size_t length,
         const OnProgressCallback& onProgressCallback,
         const OnChunkCallback& onChunkCallback,
@@ -410,8 +449,7 @@ namespace ix
         {
             if (isCancellationRequested && isCancellationRequested())
             {
-                const std::string errorMsg("Cancellation Requested");
-                return std::make_pair(false, errorMsg);
+                return std::nullopt;
             }
 
             size_t size = std::min(readBuffer.size(), length - bytesRead);
@@ -432,8 +470,7 @@ namespace ix
             }
             else if (ret <= 0 && !Socket::isWaitNeeded())
             {
-                const std::string errorMsg("Recv Error");
-                return std::make_pair(false, errorMsg);
+                return std::nullopt;
             }
 
             if (onProgressCallback) onProgressCallback((int) bytesRead, (int) length);
@@ -442,11 +479,10 @@ namespace ix
             // This way we are not busy looping
             if (isReadyToRead(1) == PollResultType::Error)
             {
-                const std::string errorMsg("Poll Error");
-                return std::make_pair(false, errorMsg);
+                return std::nullopt;
             }
         }
 
-        return std::make_pair(true, std::string(output.begin(), output.end()));
+        return std::string(output.begin(), output.end());
     }
 } // namespace ix

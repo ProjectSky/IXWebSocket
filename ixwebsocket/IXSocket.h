@@ -11,6 +11,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 
 #ifdef __APPLE__
@@ -26,6 +27,7 @@ typedef SSIZE_T ssize_t;
 
 #include "IXCancellationRequest.h"
 #include "IXProgressCallback.h"
+#include "IXProxyConfig.h"
 #include "IXSelectInterrupt.h"
 
 namespace ix
@@ -63,6 +65,7 @@ namespace ix
                              std::string& errMsg,
                              const CancellationRequest& isCancellationRequested);
         virtual void close();
+        bool isOpen() const;
 
         virtual ssize_t send(char* buffer, size_t length);
         ssize_t send(const std::string& buffer);
@@ -73,11 +76,11 @@ namespace ix
         bool readByte(void* buffer, const CancellationRequest& isCancellationRequested);
         bool writeBytes(const std::string& str, const CancellationRequest& isCancellationRequested);
 
-        std::pair<bool, std::string> readLine(const CancellationRequest& isCancellationRequested);
-        std::pair<bool, std::string> readBytes(size_t length,
-                                               const OnProgressCallback& onProgressCallback,
-                                               const OnChunkCallback& onChunkCallback,
-                                               const CancellationRequest& isCancellationRequested);
+        std::optional<std::string> readLine(const CancellationRequest& isCancellationRequested);
+        std::optional<std::string> readBytes(size_t length,
+                                             const OnProgressCallback& onProgressCallback,
+                                             const OnChunkCallback& onChunkCallback,
+                                             const CancellationRequest& isCancellationRequested);
 
         static int getErrno();
         static bool isWaitNeeded();
@@ -88,12 +91,21 @@ namespace ix
                                    int sockfd,
                                    const SelectInterruptPtr& selectInterrupt);
 
+        void setProxyConfig(const ProxyConfig& proxyConfig);
+        const ProxyConfig& getProxyConfig() const;
+
     protected:
         std::atomic<int> _sockfd;
         std::mutex _socketMutex;
+        ProxyConfig _proxyConfig;
 
         static bool readSelectInterruptRequest(const SelectInterruptPtr& selectInterrupt,
                                                PollResultType* pollResult);
+
+        bool connectThroughProxy(const std::string& host,
+                                 int port,
+                                 std::string& errMsg,
+                                 const CancellationRequest& isCancellationRequested);
 
     private:
         static const int kDefaultPollTimeout;

@@ -8,7 +8,7 @@ set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake;${CMAKE_MODULE_PATH}")
 
 project(ixwebsocket LANGUAGES C CXX VERSION 11.4.6)
 
-set (CMAKE_CXX_STANDARD 11)
+set (CMAKE_CXX_STANDARD 17)
 set (CXX_STANDARD_REQUIRED ON)
 set (CMAKE_CXX_EXTENSIONS OFF)
 set (CMAKE_EXPORT_COMPILE_COMMANDS yes)
@@ -37,6 +37,7 @@ set( IXWEBSOCKET_SOURCES
     ixwebsocket/IXGzipCodec.cpp
     ixwebsocket/IXHttp.cpp
     ixwebsocket/IXHttpClient.cpp
+    ixwebsocket/IXHttpConnectionPool.cpp
     ixwebsocket/IXHttpServer.cpp
     ixwebsocket/IXNetSystem.cpp
     ixwebsocket/IXSelectInterrupt.cpp
@@ -44,6 +45,8 @@ set( IXWEBSOCKET_SOURCES
     ixwebsocket/IXSelectInterruptPipe.cpp
     ixwebsocket/IXSelectInterruptEvent.cpp
     ixwebsocket/IXSetThreadName.cpp
+    ixwebsocket/IXProxyConfig.cpp
+    ixwebsocket/IXProxyConnect.cpp
     ixwebsocket/IXSocket.cpp
     ixwebsocket/IXSocketConnect.cpp
     ixwebsocket/IXSocketFactory.cpp
@@ -77,9 +80,12 @@ set( IXWEBSOCKET_HEADERS
     ixwebsocket/IXGzipCodec.h
     ixwebsocket/IXHttp.h
     ixwebsocket/IXHttpClient.h
+    ixwebsocket/IXHttpConnectionPool.h
     ixwebsocket/IXHttpServer.h
     ixwebsocket/IXNetSystem.h
     ixwebsocket/IXProgressCallback.h
+    ixwebsocket/IXProxyConfig.h
+    ixwebsocket/IXProxyConnect.h
     ixwebsocket/IXSelectInterrupt.h
     ixwebsocket/IXSelectInterruptFactory.h
     ixwebsocket/IXSelectInterruptPipe.h
@@ -115,6 +121,8 @@ set( IXWEBSOCKET_HEADERS
     ixwebsocket/IXWebSocketSendData.h
     ixwebsocket/IXWebSocketSendInfo.h
     ixwebsocket/IXWebSocketServer.h
+    ixwebsocket/IXWebSocketStats.h
+    ixwebsocket/IXWebSocketTimeouts.h
     ixwebsocket/IXWebSocketTransport.h
     ixwebsocket/IXWebSocketVersion.h
 )

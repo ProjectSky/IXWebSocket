@@ -40,6 +40,8 @@ namespace ix
 
     private:
         std::atomic<int> _sockfd;
-        struct sockaddr_in _server;
+        struct sockaddr_storage _server;
+        socklen_t _serverLen;
+        int _addressFamily;
     };
 } // namespace ix

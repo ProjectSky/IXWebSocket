@@ -10,6 +10,7 @@
 #include "IXStrCaseCompare.h"
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace ix
@@ -18,6 +19,6 @@ namespace ix
 
     using WebSocketHttpHeaders = std::map<std::string, std::string, CaseInsensitiveLess>;
 
-    std::pair<bool, WebSocketHttpHeaders> parseHttpHeaders(
+    std::optional<WebSocketHttpHeaders> parseHttpHeaders(
         std::unique_ptr<Socket>& socket, const CancellationRequest& isCancellationRequested);
 } // namespace ix

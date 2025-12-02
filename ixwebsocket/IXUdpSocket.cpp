@@ -14,8 +14,10 @@ namespace ix
 {
     UdpSocket::UdpSocket(int fd)
         : _sockfd(fd)
+        , _serverLen(0)
+        , _addressFamily(AF_INET)
     {
-        ;
+        memset(&_server, 0, sizeof(_server));
     }
 
     UdpSocket::~UdpSocket()
@@ -67,10 +69,27 @@ namespace ix
 
     bool UdpSocket::init(const std::string& host, int port, std::string& errMsg)
     {
-        _sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        // DNS resolution with IPv4/IPv6 support
+        struct addrinfo hints, *result = nullptr;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_DGRAM;
+
+        std::string portStr = std::to_string(port);
+        int ret = getaddrinfo(host.c_str(), portStr.c_str(), &hints, &result);
+        if (ret != 0 || result == nullptr)
+        {
+            errMsg = gai_strerror(ret);
+            if (result) freeaddrinfo(result);
+            return false;
+        }
+
+        _addressFamily = result->ai_family;
+        _sockfd = socket(_addressFamily, SOCK_DGRAM, IPPROTO_UDP);
         if (_sockfd < 0)
         {
             errMsg = "Could not create socket";
+            freeaddrinfo(result);
             return false;
         }
 
@@ -78,30 +97,12 @@ namespace ix
         unsigned long nonblocking = 1;
         ioctlsocket(_sockfd, FIONBIO, &nonblocking);
 #else
-        fcntl(_sockfd, F_SETFL, O_NONBLOCK); // make socket non blocking
+        fcntl(_sockfd, F_SETFL, O_NONBLOCK);
 #endif
 
         memset(&_server, 0, sizeof(_server));
-        _server.sin_family = AF_INET;
-        _server.sin_port = htons(port);
-
-        // DNS resolution.
-        struct addrinfo hints, *result = nullptr;
-        memset(&hints, 0, sizeof(hints));
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_DGRAM;
-
-        int ret = getaddrinfo(host.c_str(), nullptr, &hints, &result);
-        if (ret != 0)
-        {
-            errMsg = strerror(UdpSocket::getErrno());
-            freeaddrinfo(result);
-            close();
-            return false;
-        }
-
-        struct sockaddr_in* host_addr = (struct sockaddr_in*) result->ai_addr;
-        memcpy(&_server.sin_addr, &host_addr->sin_addr, sizeof(struct in_addr));
+        memcpy(&_server, result->ai_addr, result->ai_addrlen);
+        _serverLen = result->ai_addrlen;
         freeaddrinfo(result);
 
         return true;
@@ -110,15 +111,15 @@ namespace ix
     ssize_t UdpSocket::sendto(const std::string& buffer)
     {
         return (ssize_t)::sendto(
-            _sockfd, buffer.data(), buffer.size(), 0, (struct sockaddr*) &_server, sizeof(_server));
+            _sockfd, buffer.data(), buffer.size(), 0, (struct sockaddr*) &_server, _serverLen);
     }
 
     ssize_t UdpSocket::recvfrom(char* buffer, size_t length)
     {
 #ifdef _WIN32
-        int addressLen = (int) sizeof(_server);
+        int addressLen = (int) _serverLen;
 #else
-        socklen_t addressLen = (socklen_t) sizeof(_server);
+        socklen_t addressLen = _serverLen;
 #endif
         return (ssize_t)::recvfrom(
             _sockfd, buffer, length, 0, (struct sockaddr*) &_server, &addressLen);

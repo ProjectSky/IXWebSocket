@@ -10,6 +10,7 @@
 #pragma once
 
 #include "IXProgressCallback.h"
+#include "IXProxyConfig.h"
 #include "IXSocketTLSOptions.h"
 #include "IXWebSocketCloseConstants.h"
 #include "IXWebSocketErrorInfo.h"
@@ -18,6 +19,8 @@
 #include "IXWebSocketPerMessageDeflateOptions.h"
 #include "IXWebSocketSendData.h"
 #include "IXWebSocketSendInfo.h"
+#include "IXWebSocketStats.h"
+#include "IXWebSocketTimeouts.h"
 #include "IXWebSocketTransport.h"
 #include <atomic>
 #include <condition_variable>
@@ -41,6 +44,10 @@ namespace ix
 
     using OnTrafficTrackerCallback = std::function<void(size_t size, bool incoming)>;
 
+    // Backpressure callback: called when buffer exceeds/falls below threshold
+    // Parameters: current buffer size, is above threshold
+    using OnBackpressureCallback = std::function<void(size_t, bool)>;
+
     class WebSocket
     {
     public:
@@ -51,18 +58,23 @@ namespace ix
 
         // send extra headers in client handshake request
         void setExtraHeaders(const WebSocketHttpHeaders& headers);
+        const WebSocketHttpHeaders& getExtraHeaders() const;
         void setPerMessageDeflateOptions(
             const WebSocketPerMessageDeflateOptions& perMessageDeflateOptions);
         void setTLSOptions(const SocketTLSOptions& socketTLSOptions);
+        const SocketTLSOptions& getTLSOptions() const;
+        void setProxyConfig(const ProxyConfig& proxyConfig);
+        const ProxyConfig& getProxyConfig() const;
         void setPingMessage(const std::string& sendMessage,
                             SendMessageKind pingType = SendMessageKind::Ping);
         void setPingInterval(int pingIntervalSecs);
-        void enablePong();
-        void disablePong();
-        void enablePerMessageDeflate();
-        void disablePerMessageDeflate();
+        void setPong(bool enabled);
+        void setTimeouts(const WebSocketTimeouts& timeouts);
+        const WebSocketTimeouts& getTimeouts() const;
+        void setPerMessageDeflate(bool enabled);
         void addSubProtocol(const std::string& subProtocol);
         void setHandshakeTimeout(int handshakeTimeoutSecs);
+        int getHandshakeTimeout() const;
 
         // Run asynchronously, by calling start and stop.
         void start();
@@ -78,6 +90,10 @@ namespace ix
         // send is in text mode by default
         WebSocketSendInfo send(const std::string& data,
                                bool binary = false,
+                               const OnProgressCallback& onProgressCallback = nullptr);
+        WebSocketSendInfo send(const std::string& data,
+                               bool binary,
+                               MessagePriority priority,
                                const OnProgressCallback& onProgressCallback = nullptr);
         WebSocketSendInfo sendBinary(const std::string& data,
                                      const OnProgressCallback& onProgressCallback = nullptr);
@@ -101,6 +117,11 @@ namespace ix
         static void setTrafficTrackerCallback(const OnTrafficTrackerCallback& callback);
         static void resetTrafficTrackerCallback();
 
+        // Backpressure management
+        void setBackpressureCallback(const OnBackpressureCallback& callback);
+        void setBackpressureThreshold(size_t threshold);
+        size_t getBackpressureThreshold() const;
+
         ReadyState getReadyState() const;
         static std::string readyStateToString(ReadyState readyState);
 
@@ -110,16 +131,22 @@ namespace ix
         int getPingInterval() const;
         size_t bufferedAmount() const;
 
-        void enableAutomaticReconnection();
-        void disableAutomaticReconnection();
+        // Statistics
+        const WebSocketStats& getStats() const;
+        void resetStats();
+
+        void setAutomaticReconnection(bool enabled);
         bool isAutomaticReconnectionEnabled() const;
         void setMaxWaitBetweenReconnectionRetries(uint32_t maxWaitBetweenReconnectionRetries);
         void setMinWaitBetweenReconnectionRetries(uint32_t minWaitBetweenReconnectionRetries);
         uint32_t getMaxWaitBetweenReconnectionRetries() const;
         uint32_t getMinWaitBetweenReconnectionRetries() const;
         const std::vector<std::string>& getSubProtocols();
+        void clearSubProtocols();
+        void removeSubProtocol(const std::string& subProtocol);
 
         void setAutoThreadName(bool enabled);
+        bool getAutoThreadName() const;
 
     private:
         WebSocketSendInfo sendMessage(const IXWebSocketSendData& message,
@@ -135,7 +162,8 @@ namespace ix
         WebSocketInitResult connectToSocket(std::unique_ptr<Socket>,
                                             int timeoutSecs,
                                             bool enablePerMessageDeflate,
-                                            HttpRequestPtr request = nullptr);
+                                            HttpRequestPtr request = nullptr,
+                                            const std::vector<std::string>& subProtocols = {});
 
         WebSocketTransport _ws;
 
@@ -145,11 +173,23 @@ namespace ix
         WebSocketPerMessageDeflateOptions _perMessageDeflateOptions;
 
         SocketTLSOptions _socketTLSOptions;
+        ProxyConfig _proxyConfig;
 
         mutable std::mutex _configMutex; // protect all config variables access
 
         OnMessageCallback _onMessageCallback;
         static OnTrafficTrackerCallback _onTrafficTrackerCallback;
+
+        // Backpressure
+        OnBackpressureCallback _onBackpressureCallback;
+        size_t _backpressureThreshold;
+        bool _backpressureActive;
+
+        // Statistics
+        WebSocketStats _stats;
+
+        // Timeouts
+        WebSocketTimeouts _timeouts;
 
         std::atomic<bool> _stop;
         std::thread _thread;

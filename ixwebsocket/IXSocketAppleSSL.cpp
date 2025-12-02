@@ -9,6 +9,7 @@
 
 #include "IXSocketAppleSSL.h"
 
+#include "IXProxyConnect.h"
 #include "IXSocketConnect.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -196,8 +197,24 @@ namespace ix
         {
             std::lock_guard<std::mutex> lock(_mutex);
 
-            _sockfd = SocketConnect::connect(host, port, errMsg, isCancellationRequested);
-            if (_sockfd == -1) return false;
+            if (_proxyConfig.isEnabled())
+            {
+                _sockfd = SocketConnect::connect(_proxyConfig.host, _proxyConfig.port,
+                                                 errMsg, isCancellationRequested);
+                if (_sockfd == -1) return false;
+
+                if (!ProxyConnect::connect(_sockfd, _proxyConfig, host, port,
+                                           errMsg, isCancellationRequested))
+                {
+                    close();
+                    return false;
+                }
+            }
+            else
+            {
+                _sockfd = SocketConnect::connect(host, port, errMsg, isCancellationRequested);
+                if (_sockfd == -1) return false;
+            }
 
             _sslContext = SSLCreateContext(kCFAllocatorDefault, kSSLClientSide, kSSLStreamType);
 

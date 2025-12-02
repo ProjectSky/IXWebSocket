@@ -16,6 +16,7 @@
 #include <list>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <thread>
@@ -55,7 +56,7 @@ namespace ix
         const static int kDefaultAddressFamily;
 
         void start();
-        std::pair<bool, std::string> listen();
+        std::optional<std::string> listen();  // nullopt = success, value = error message
         void wait();
 
         void setTLSOptions(const SocketTLSOptions& socketTLSOptions);

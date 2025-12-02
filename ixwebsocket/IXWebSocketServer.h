@@ -8,8 +8,10 @@
 
 #include "IXSocketServer.h"
 #include "IXWebSocket.h"
+#include <chrono>
 #include <condition_variable>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -38,22 +40,36 @@ namespace ix
         virtual ~WebSocketServer();
         virtual void stop() final;
 
-        void enablePong();
-        void disablePong();
-        void disablePerMessageDeflate();
+        void setPong(bool enabled);
+        void setPerMessageDeflate(bool enabled);
+        void addSubProtocol(const std::string& subProtocol);
+        void clearSubProtocols();
+        void removeSubProtocol(const std::string& subProtocol);
+        void setTimeouts(const WebSocketTimeouts& timeouts);
+
+        // Rate limiting
+        void setMaxConnectionsPerIp(size_t maxConnections);
+        size_t getMaxConnectionsPerIp() const;
+        size_t getConnectionCountForIp(const std::string& ip);
+        const WebSocketTimeouts& getTimeouts() const;
 
         void setOnConnectionCallback(const OnConnectionCallback& callback);
         void setOnClientMessageCallback(const OnClientMessageCallback& callback);
 
         // Get all the connected clients
-        std::set<std::shared_ptr<WebSocket>> getClients();
+        std::map<std::shared_ptr<WebSocket>, std::shared_ptr<ConnectionState>> getClients();
+        std::shared_ptr<WebSocket> getClientById(const std::string& id);
 
         void makeBroadcastServer();
         bool listenAndStart();
 
+        // Broadcast to all clients (optionally excluding sender)
+        void broadcast(const std::string& data, bool binary = false, WebSocket* exclude = nullptr);
+
         const static int kDefaultHandShakeTimeoutSecs;
 
         int getHandshakeTimeoutSecs();
+        void setHandshakeTimeoutSecs(int secs);
         bool isPongEnabled();
         bool isPerMessageDeflateEnabled();
 
@@ -63,12 +79,20 @@ namespace ix
         bool _enablePong;
         bool _enablePerMessageDeflate;
         int _pingIntervalSeconds;
+        WebSocketTimeouts _timeouts;
 
         OnConnectionCallback _onConnectionCallback;
         OnClientMessageCallback _onClientMessageCallback;
 
+        std::vector<std::string> _subProtocols;
+
+        // Rate limiting
+        size_t _maxConnectionsPerIp;
+        std::map<std::string, size_t> _connectionsPerIp;
+        std::mutex _rateLimitMutex;
+
         std::mutex _clientsMutex;
-        std::set<std::shared_ptr<WebSocket>> _clients;
+        std::map<std::shared_ptr<WebSocket>, std::shared_ptr<ConnectionState>> _clients;
 
         const static bool kDefaultEnablePong;
         const static int kPingIntervalSeconds;

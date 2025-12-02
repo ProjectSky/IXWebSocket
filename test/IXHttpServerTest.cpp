@@ -19,8 +19,8 @@ TEST_CASE("http server", "[httpd]")
         int port = getFreePort();
         ix::HttpServer server(port, "127.0.0.1");
 
-        auto res = server.listen();
-        REQUIRE(res.first);
+        auto err = server.listen();
+        REQUIRE(!err);
         server.start();
 
         HttpClient httpClient;
@@ -81,8 +81,8 @@ TEST_CASE("http server", "[httpd]")
                 return std::make_shared<HttpResponse>(400, "BAD REQUEST");
             });
 
-        auto res = server.listen();
-        REQUIRE(res.first);
+        auto err = server.listen();
+        REQUIRE(!err);
         server.start();
 
         HttpClient httpClient;
@@ -123,8 +123,8 @@ TEST_CASE("http server redirection", "[httpd_redirect]")
         ix::HttpServer server(port, "127.0.0.1");
         server.makeRedirectServer("http://example.com");
 
-        auto res = server.listen();
-        REQUIRE(res.first);
+        auto err = server.listen();
+        REQUIRE(!err);
         server.start();
 
         HttpClient httpClient;
@@ -174,8 +174,8 @@ TEST_CASE("http server redirection", "[httpd_redirect]")
         ix::HttpServer server(port, "127.0.0.1");
         server.makeRedirectServer("http://www.google.com");
 
-        auto res = server.listen();
-        REQUIRE(res.first);
+        auto err = server.listen();
+        REQUIRE(!err);
         server.start();
 
         HttpClient httpClient;

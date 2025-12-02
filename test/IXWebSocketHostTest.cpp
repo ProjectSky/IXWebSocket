@@ -51,10 +51,10 @@ bool startServer(ix::WebSocketServer& server, std::string& subProtocols)
             }
         });
 
-    auto res = server.listen();
-    if (!res.first)
+    auto err = server.listen();
+    if (err)
     {
-        log(res.second);
+        log(*err);
         return false;
     }
 

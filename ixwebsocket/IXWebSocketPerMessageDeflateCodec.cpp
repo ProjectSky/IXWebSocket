@@ -219,14 +219,32 @@ namespace ix
         //
         //    2.  Decompress the resulting data using DEFLATE.
         //
-        std::string inFixed(in);
-        inFixed += kEmptyUncompressedBlock;
-
-        _inflateState.avail_in = (uInt) inFixed.size();
-        _inflateState.next_in = (unsigned char*) (const_cast<char*>(inFixed.data()));
-
         // Clear output
         out.clear();
+
+        // First decompress the input data
+        _inflateState.avail_in = (uInt) in.size();
+        _inflateState.next_in = (unsigned char*) (const_cast<char*>(in.data()));
+
+        do
+        {
+            _inflateState.avail_out = (uInt) _compressBuffer.size();
+            _inflateState.next_out = &_compressBuffer.front();
+
+            int ret = inflate(&_inflateState, Z_NO_FLUSH);
+
+            if (ret == Z_NEED_DICT || ret == Z_DATA_ERROR || ret == Z_MEM_ERROR)
+            {
+                return false;
+            }
+
+            out.append(reinterpret_cast<char*>(&_compressBuffer.front()),
+                       _compressBuffer.size() - _inflateState.avail_out);
+        } while (_inflateState.avail_out == 0);
+
+        // Then decompress the empty block suffix
+        _inflateState.avail_in = (uInt) kEmptyUncompressedBlock.size();
+        _inflateState.next_in = (unsigned char*) (const_cast<char*>(kEmptyUncompressedBlock.data()));
 
         do
         {
@@ -237,7 +255,7 @@ namespace ix
 
             if (ret == Z_NEED_DICT || ret == Z_DATA_ERROR || ret == Z_MEM_ERROR)
             {
-                return false; // zlib error
+                return false;
             }
 
             out.append(reinterpret_cast<char*>(&_compressBuffer.front()),

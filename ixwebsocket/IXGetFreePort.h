@@ -9,4 +9,5 @@
 namespace ix
 {
     int getFreePort();
+    int getAnyFreePort(int addressFamily);
 } // namespace ix

@@ -32,10 +32,10 @@ int main(int argc, char** argv)
 
     ix::HttpServer server(port, hostname);
 
-    auto res = server.listen();
-    if (!res.first)
+    auto err = server.listen();
+    if (err)
     {
-        std::cout << res.second << std::endl;
+        std::cout << *err << std::endl;
         return 1;
     }
 

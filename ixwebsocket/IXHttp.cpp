@@ -17,7 +17,8 @@ namespace ix
     std::string Http::trim(const std::string& str)
     {
         std::string out;
-        for (auto c : str)
+        out.reserve(str.size());
+        for (char c : str)
         {
             if (c != ' ' && c != '\n' && c != '\r')
             {
@@ -104,30 +105,22 @@ namespace ix
             makeCancellationRequestWithTimeout(timeoutSecs, requestInitCancellation);
 
         // Read first line
-        auto lineResult = socket->readLine(isCancellationRequested);
-        auto lineValid = lineResult.first;
-        auto line = lineResult.second;
-
-        if (!lineValid)
+        auto line = socket->readLine(isCancellationRequested);
+        if (!line)
         {
             return std::make_tuple(false, "Error reading HTTP request line", httpRequest);
         }
 
         // Parse request line (GET /foo HTTP/1.1\r\n)
-        auto requestLine = Http::parseRequestLine(line);
-        auto method = std::get<0>(requestLine);
-        auto uri = std::get<1>(requestLine);
-        auto httpVersion = std::get<2>(requestLine);
+        auto [method, uri, httpVersion] = Http::parseRequestLine(*line);
 
         // Retrieve and validate HTTP headers
-        auto result = parseHttpHeaders(socket, isCancellationRequested);
-        auto headersValid = result.first;
-        auto headers = result.second;
-
-        if (!headersValid)
+        auto headersOpt = parseHttpHeaders(socket, isCancellationRequested);
+        if (!headersOpt)
         {
             return std::make_tuple(false, "Error parsing HTTP headers", httpRequest);
         }
+        auto headers = std::move(*headersOpt);
 
         std::string body;
         if (headers.find("Content-Length") != headers.end())
@@ -164,12 +157,12 @@ namespace ix
             }
 
             auto res = socket->readBytes(contentLength, nullptr, nullptr, isCancellationRequested);
-            if (!res.first)
+            if (!res)
             {
                 return std::make_tuple(
-                    false, std::string("Error reading request: ") + res.second, httpRequest);
+                    false, std::string("Error reading request body"), httpRequest);
             }
-            body = res.second;
+            body = std::move(*res);
         }
 
         // If the content was compressed with gzip, decode it
@@ -208,9 +201,16 @@ namespace ix
             return false;
         }
 
+        // Check if chunked encoding should be used
+        bool useChunked = response->headers.find("Transfer-Encoding") != response->headers.end() &&
+                          response->headers.at("Transfer-Encoding") == "chunked";
+
         // Write headers
         ss.str("");
-        ss << "Content-Length: " << response->body.size() << "\r\n";
+        if (!useChunked)
+        {
+            ss << "Content-Length: " << response->body.size() << "\r\n";
+        }
         for (auto&& it : response->headers)
         {
             ss << it.first << ": " << it.second << "\r\n";
@@ -222,6 +222,26 @@ namespace ix
             return false;
         }
 
-        return response->body.empty() ? true : socket->writeBytes(response->body, nullptr);
+        // Send body
+        if (response->body.empty())
+        {
+            return true;
+        }
+
+        if (useChunked)
+        {
+            // Send as chunked
+            ss.str("");
+            ss << std::hex << response->body.size() << "\r\n";
+            if (!socket->writeBytes(ss.str(), nullptr))
+                return false;
+            if (!socket->writeBytes(response->body, nullptr))
+                return false;
+            if (!socket->writeBytes("\r\n0\r\n\r\n", nullptr))
+                return false;
+            return true;
+        }
+
+        return socket->writeBytes(response->body, nullptr);
     }
 } // namespace ix

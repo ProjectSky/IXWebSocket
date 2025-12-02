@@ -9,6 +9,7 @@
 
 #include "IXSocketOpenSSL.h"
 
+#include "IXProxyConnect.h"
 #include "IXSocketConnect.h"
 #include "IXUniquePtr.h"
 #include <cassert>
@@ -733,8 +734,24 @@ namespace ix
                 return false;
             }
 
-            _sockfd = SocketConnect::connect(host, port, errMsg, isCancellationRequested);
-            if (_sockfd == -1) return false;
+            if (_proxyConfig.isEnabled())
+            {
+                _sockfd = SocketConnect::connect(_proxyConfig.host, _proxyConfig.port,
+                                                 errMsg, isCancellationRequested);
+                if (_sockfd == -1) return false;
+
+                if (!ProxyConnect::connect(_sockfd, _proxyConfig, host, port,
+                                           errMsg, isCancellationRequested))
+                {
+                    Socket::close();
+                    return false;
+                }
+            }
+            else
+            {
+                _sockfd = SocketConnect::connect(host, port, errMsg, isCancellationRequested);
+                if (_sockfd == -1) return false;
+            }
 
             _ssl_context = openSSLCreateContext(errMsg);
             if (_ssl_context == nullptr)

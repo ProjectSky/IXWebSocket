@@ -12,6 +12,7 @@
 
 #include "IXCancellationRequest.h"
 #include "IXProgressCallback.h"
+#include "IXProxyConfig.h"
 #include "IXSocketTLSOptions.h"
 #include "IXWebSocketCloseConstants.h"
 #include "IXWebSocketHandshake.h"
@@ -38,6 +39,12 @@ namespace ix
         Text,
         Binary,
         Ping
+    };
+
+    enum class MessagePriority
+    {
+        Normal = 0,
+        High = 1
     };
 
     class WebSocketTransport
@@ -76,8 +83,13 @@ namespace ix
 
         void configure(const WebSocketPerMessageDeflateOptions& perMessageDeflateOptions,
                        const SocketTLSOptions& socketTLSOptions,
+                       const ProxyConfig& proxyConfig,
                        bool enablePong,
-                       int pingIntervalSecs);
+                       int pingIntervalSecs,
+                       int pingTimeoutSecs = -1,
+                       int idleTimeoutSecs = -1,
+                       int sendTimeoutSecs = 300,
+                       int closeTimeoutSecs = 5);
 
         // Client
         WebSocketInitResult connectToUrl(const std::string& url,
@@ -88,7 +100,8 @@ namespace ix
         WebSocketInitResult connectToSocket(std::unique_ptr<Socket> socket,
                                             int timeoutSecs,
                                             bool enablePerMessageDeflate,
-                                            HttpRequestPtr request = nullptr);
+                                            HttpRequestPtr request = nullptr,
+                                            const std::vector<std::string>& subProtocols = {});
 
         PollResult poll();
         WebSocketSendInfo sendBinary(const IXWebSocketSendData& message,
@@ -210,6 +223,9 @@ namespace ix
         // Used to control TLS connection behavior
         SocketTLSOptions _socketTLSOptions;
 
+        // Proxy configuration
+        ProxyConfig _proxyConfig;
+
         // Used to cancel dns lookup + socket connect + http upgrade
         std::atomic<bool> _requestInitCancellation;
 
@@ -223,7 +239,15 @@ namespace ix
 
         // Optional ping and pong timeout
         int _pingIntervalSecs;
+        int _pingTimeoutSecs;
+        int _idleTimeoutSecs;
+        int _sendTimeoutSecs;
+        int _closeTimeoutMs;
         std::atomic<bool> _pongReceived;
+        std::chrono::time_point<std::chrono::steady_clock> _lastPongTimePoint;
+        mutable std::mutex _lastPongTimePointMutex;
+        std::chrono::time_point<std::chrono::steady_clock> _lastActivityTimePoint;
+        mutable std::mutex _lastActivityTimePointMutex;
 
         static const int kDefaultPingIntervalSecs;
 

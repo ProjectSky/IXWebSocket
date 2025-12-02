@@ -150,10 +150,10 @@ namespace
                     });
             });
 
-        auto res = server.listen();
-        if (!res.first)
+        auto err = server.listen();
+        if (err)
         {
-            log(res.second);
+            log(*err);
             return false;
         }
 

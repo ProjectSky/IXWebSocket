@@ -4,18 +4,11 @@
  *  Copyright (c) 2019 Machine Zone. All rights reserved.
  */
 
-// Using inet_addr will trigger an error on uwp without this
-// FIXME: use a different api
-#ifdef _WIN32
-#ifndef _WINSOCK_DEPRECATED_NO_WARNINGS
-#define _WINSOCK_DEPRECATED_NO_WARNINGS
-#endif
-#endif
-
 #include "IXGetFreePort.h"
 
 #include <ixwebsocket/IXNetSystem.h>
 #include <ixwebsocket/IXSocket.h>
+#include <cstring>
 #include <random>
 #include <string>
 
@@ -29,10 +22,10 @@ namespace ix
         return dist(rd);
     }
 
-    int getAnyFreePort()
+    int getAnyFreePort(int addressFamily)
     {
         socket_t sockfd;
-        if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+        if ((sockfd = socket(addressFamily, SOCK_STREAM, 0)) < 0)
         {
             return getAnyFreePortRandom();
         }
@@ -40,33 +33,66 @@ namespace ix
         int enable = 1;
         if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (char*) &enable, sizeof(enable)) < 0)
         {
+            Socket::closeSocket(sockfd);
             return getAnyFreePortRandom();
         }
 
         // Bind to port 0. This is the standard way to get a free port.
-        struct sockaddr_in server; // server address information
-        server.sin_family = AF_INET;
-        server.sin_port = htons(0);
-        server.sin_addr.s_addr = inet_addr("127.0.0.1");
-
-        if (bind(sockfd, (struct sockaddr*) &server, sizeof(server)) < 0)
+        int port = -1;
+        if (addressFamily == AF_INET)
         {
-            Socket::closeSocket(sockfd);
-            return getAnyFreePortRandom();
+            struct sockaddr_in server;
+            memset(&server, 0, sizeof(server));
+            server.sin_family = AF_INET;
+            server.sin_port = htons(0);
+            server.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+            if (bind(sockfd, (struct sockaddr*) &server, sizeof(server)) < 0)
+            {
+                Socket::closeSocket(sockfd);
+                return getAnyFreePortRandom();
+            }
+
+            struct sockaddr_in sa;
+            socklen_t len = sizeof(sa);
+            if (getsockname(sockfd, (struct sockaddr*) &sa, &len) < 0)
+            {
+                Socket::closeSocket(sockfd);
+                return getAnyFreePortRandom();
+            }
+            port = ntohs(sa.sin_port);
+        }
+        else // AF_INET6
+        {
+            struct sockaddr_in6 server;
+            memset(&server, 0, sizeof(server));
+            server.sin6_family = AF_INET6;
+            server.sin6_port = htons(0);
+            server.sin6_addr = in6addr_loopback;
+
+            if (bind(sockfd, (struct sockaddr*) &server, sizeof(server)) < 0)
+            {
+                Socket::closeSocket(sockfd);
+                return getAnyFreePortRandom();
+            }
+
+            struct sockaddr_in6 sa;
+            socklen_t len = sizeof(sa);
+            if (getsockname(sockfd, (struct sockaddr*) &sa, &len) < 0)
+            {
+                Socket::closeSocket(sockfd);
+                return getAnyFreePortRandom();
+            }
+            port = ntohs(sa.sin6_port);
         }
 
-        struct sockaddr_in sa; // server address information
-        socklen_t len = sizeof(sa);
-        if (getsockname(sockfd, (struct sockaddr*) &sa, &len) < 0)
-        {
-            Socket::closeSocket(sockfd);
-            return getAnyFreePortRandom();
-        }
-
-        int port = ntohs(sa.sin_port);
         Socket::closeSocket(sockfd);
-
         return port;
+    }
+
+    int getAnyFreePort()
+    {
+        return getAnyFreePort(AF_INET);
     }
 
     int getFreePort()

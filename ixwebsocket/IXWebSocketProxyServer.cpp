@@ -101,7 +101,7 @@ namespace ix
                             url += msg->openInfo.uri;
 
                             state->webSocket().setUrl(url);
-                            state->webSocket().disableAutomaticReconnection();
+                            state->webSocket().setAutomaticReconnection(false);
                             state->webSocket().start();
 
                             // we should sleep here for a bit until we've established the
@@ -123,8 +123,8 @@ namespace ix
                 }
             });
 
-        auto res = server.listen();
-        if (!res.first)
+        auto err = server.listen();
+        if (err)
         {
             return 1;
         }

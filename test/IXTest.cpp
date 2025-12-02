@@ -117,10 +117,10 @@ namespace ix
                 }
             });
 
-        auto res = server.listen();
-        if (!res.first)
+        auto err = server.listen();
+        if (err)
         {
-            TLogger() << res.second;
+            TLogger() << *err;
             return false;
         }
 

@@ -17,6 +17,7 @@
 #include <iostream>
 #include <random>
 #include <sstream>
+#include <tuple>
 
 namespace ix
 {
@@ -69,7 +70,8 @@ namespace ix
         ss << " ";
         ss << reason;
         ss << "\r\n";
-        ss << "Server: " << userAgent() << "\r\n";
+        const std::string& customServer = getCustomServerHeader();
+        ss << "Server: " << (customServer.empty() ? userAgent() : customServer) << "\r\n";
 
         // Socket write can only be cancelled through a timeout here, not manually.
         static std::atomic<bool> requestInitCancellation(false);
@@ -100,6 +102,7 @@ namespace ix
 
         std::string errMsg;
         bool success = _socket->connect(host, port, errMsg, isCancellationRequested);
+
         if (!success)
         {
             std::stringstream ss;
@@ -154,20 +157,15 @@ namespace ix
         }
 
         // Read HTTP status line
-        auto lineResult = _socket->readLine(isCancellationRequested);
-        auto lineValid = lineResult.first;
-        auto line = lineResult.second;
-
-        if (!lineValid)
+        auto line = _socket->readLine(isCancellationRequested);
+        if (!line)
         {
             return WebSocketInitResult(
                 false, 0, std::string("Failed reading HTTP status line from ") + url);
         }
 
         // Validate status
-        auto statusLine = Http::parseStatusLine(line);
-        std::string httpVersion = statusLine.first;
-        int status = statusLine.second;
+        auto [httpVersion, status] = Http::parseStatusLine(*line);
 
         // HTTP/1.0 is too old.
         if (httpVersion != "HTTP/1.1")
@@ -175,18 +173,16 @@ namespace ix
             std::stringstream ss;
             ss << "Expecting HTTP/1.1, got " << httpVersion << ". "
                << "Rejecting connection to " << url << ", status: " << status
-               << ", HTTP Status line: " << line;
+               << ", HTTP Status line: " << *line;
             return WebSocketInitResult(false, status, ss.str());
         }
 
-        auto result = parseHttpHeaders(_socket, isCancellationRequested);
-        auto headersValid = result.first;
-        auto headers = result.second;
-
-        if (!headersValid)
+        auto headersOpt = parseHttpHeaders(_socket, isCancellationRequested);
+        if (!headersOpt)
         {
             return WebSocketInitResult(false, status, "Error parsing HTTP headers");
         }
+        auto headers = std::move(*headersOpt);
 
         // We want an 101 HTTP status for websocket, otherwise it could be
         // a redirection (like 301)
@@ -194,7 +190,7 @@ namespace ix
         {
             std::stringstream ss;
             ss << "Expecting status 101 (Switching Protocol), got " << status
-               << " status connecting to " << url << ", HTTP Status line: " << line;
+               << " status connecting to " << url << ", HTTP Status line: " << *line;
 
             return WebSocketInitResult(false, status, ss.str(), headers, path);
         }
@@ -251,7 +247,8 @@ namespace ix
 
     WebSocketInitResult WebSocketHandshake::serverHandshake(int timeoutSecs,
                                                             bool enablePerMessageDeflate,
-                                                            HttpRequestPtr request)
+                                                            HttpRequestPtr request,
+                                                            const std::vector<std::string>& subProtocols)
     {
         _requestInitCancellation = false;
 
@@ -271,20 +268,14 @@ namespace ix
         else
         {
             // Read first line
-            auto lineResult = _socket->readLine(isCancellationRequested);
-            auto lineValid = lineResult.first;
-            auto line = lineResult.second;
-
-            if (!lineValid)
+            auto line = _socket->readLine(isCancellationRequested);
+            if (!line)
             {
                 return sendErrorResponse(400, "Error reading HTTP request line");
             }
 
             // Validate request line (GET /foo HTTP/1.1\r\n)
-            auto requestLine = Http::parseRequestLine(line);
-            method = std::get<0>(requestLine);
-            uri = std::get<1>(requestLine);
-            httpVersion = std::get<2>(requestLine);
+            std::tie(method, uri, httpVersion) = Http::parseRequestLine(*line);
         }
 
         if (method != "GET")
@@ -306,14 +297,12 @@ namespace ix
         else
         {
             // Retrieve and validate HTTP headers
-            auto result = parseHttpHeaders(_socket, isCancellationRequested);
-            auto headersValid = result.first;
-            headers = result.second;
-
-            if (!headersValid)
+            auto headersOpt = parseHttpHeaders(_socket, isCancellationRequested);
+            if (!headersOpt)
             {
                 return sendErrorResponse(400, "Error parsing HTTP headers");
             }
+            headers = std::move(*headersOpt);
         }
 
         if (headers.find("sec-websocket-key") == headers.end())
@@ -363,7 +352,24 @@ namespace ix
         ss << "Sec-WebSocket-Accept: " << std::string(output) << "\r\n";
         ss << "Upgrade: websocket\r\n";
         ss << "Connection: Upgrade\r\n";
-        ss << "Server: " << userAgent() << "\r\n";
+        const std::string& customServer = getCustomServerHeader();
+        ss << "Server: " << (customServer.empty() ? userAgent() : customServer) << "\r\n";
+
+        // Handle sub-protocol negotiation
+        std::string selectedProtocol;
+        if (!subProtocols.empty() && headers.find("sec-websocket-protocol") != headers.end())
+        {
+            std::string clientProtocols = headers["sec-websocket-protocol"];
+            for (const auto& serverProtocol : subProtocols)
+            {
+                if (clientProtocols.find(serverProtocol) != std::string::npos)
+                {
+                    selectedProtocol = serverProtocol;
+                    ss << "Sec-WebSocket-Protocol: " << serverProtocol << "\r\n";
+                    break;
+                }
+            }
+        }
 
         // Parse the client headers. Does it support deflate ?
         std::string header = headers["sec-websocket-extensions"];
@@ -390,6 +396,6 @@ namespace ix
                 false, 0, std::string("Failed sending response to remote end"));
         }
 
-        return WebSocketInitResult(true, 200, "", headers, uri);
+        return WebSocketInitResult(true, 200, "", headers, uri, selectedProtocol);
     }
 } // namespace ix

@@ -23,14 +23,15 @@ namespace ix
                             int status = 0,
                             const std::string& e = std::string(),
                             WebSocketHttpHeaders h = WebSocketHttpHeaders(),
-                            const std::string& u = std::string())
+                            const std::string& u = std::string(),
+                            const std::string& p = std::string())
         {
             success = s;
             http_status = status;
             errorStr = e;
             headers = h;
             uri = u;
-            protocol = h["Sec-WebSocket-Protocol"];
+            protocol = p.empty() ? h["Sec-WebSocket-Protocol"] : p;
         }
     };
 } // namespace ix

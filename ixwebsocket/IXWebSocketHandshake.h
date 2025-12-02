@@ -17,6 +17,7 @@
 #include <chrono>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace ix
 {
@@ -39,7 +40,8 @@ namespace ix
 
         WebSocketInitResult serverHandshake(int timeoutSecs,
                                             bool enablePerMessageDeflate,
-                                            HttpRequestPtr request = nullptr);
+                                            HttpRequestPtr request = nullptr,
+                                            const std::vector<std::string>& subProtocols = {});
 
     private:
         std::string genRandomString(const int len);

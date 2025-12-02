@@ -1221,10 +1221,10 @@ namespace ix
                 }
             });
 
-        auto res = server.listen();
-        if (!res.first)
+        auto err = server.listen();
+        if (err)
         {
-            spdlog::error(res.second);
+            spdlog::error(*err);
             return 1;
         }
 
@@ -1473,10 +1473,10 @@ namespace ix
             server.makeDebugServer();
         }
 
-        auto res = server.listen();
-        if (!res.first)
+        auto err = server.listen();
+        if (err)
         {
-            spdlog::error(res.second);
+            spdlog::error(*err);
             return 1;
         }
 
@@ -1732,10 +1732,10 @@ namespace ix
                 }
             });
 
-        auto res = server.listen();
-        if (!res.first)
+        auto err = server.listen();
+        if (err)
         {
-            spdlog::error(res.second);
+            spdlog::error(*err);
             return 1;
         }
 
@@ -2388,10 +2388,10 @@ namespace ix
                 }
             });
 
-        auto res = server.listen();
-        if (!res.first)
+        auto err = server.listen();
+        if (err)
         {
-            spdlog::info(res.second);
+            spdlog::info(*err);
             return 1;
         }
 

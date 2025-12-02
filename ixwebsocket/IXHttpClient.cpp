@@ -6,7 +6,9 @@
 
 #include "IXHttpClient.h"
 
+#include "IXBase64.h"
 #include "IXGzipCodec.h"
+#include "IXHttpConnectionPool.h"
 #include "IXSocketFactory.h"
 #include "IXUrlParser.h"
 #include "IXUserAgent.h"
@@ -51,6 +53,11 @@ namespace ix
     void HttpClient::setTLSOptions(const SocketTLSOptions& tlsOptions)
     {
         _tlsOptions = tlsOptions;
+    }
+
+    void HttpClient::setProxyConfig(const ProxyConfig& proxyConfig)
+    {
+        _proxyConfig = proxyConfig;
     }
 
     void HttpClient::setForceBody(bool value)
@@ -105,11 +112,11 @@ namespace ix
 
                 if (_stop) return;
 
-                auto p = _queue.front();
+                auto [queuedArgs, queuedCallback] = _queue.front();
                 _queue.pop();
 
-                args = p.first;
-                onResponseCallback = p.second;
+                args = queuedArgs;
+                onResponseCallback = queuedCallback;
             }
 
             if (_stop) return;
@@ -158,18 +165,38 @@ namespace ix
 
         bool tls = protocol == "https";
         std::string errorMsg;
-        _socket = createSocket(tls, -1, errorMsg, _tlsOptions);
 
-        if (!_socket)
+        // Check if we can reuse the existing connection
+        bool canReuse = _keepAlive &&
+                        _socket &&
+                        _socket->isOpen() &&
+                        isConnectionReusable(host, port, tls);
+
+        if (!canReuse)
         {
-            return std::make_shared<HttpResponse>(code,
-                                                  description,
-                                                  HttpErrorCode::CannotCreateSocket,
-                                                  headers,
-                                                  payload,
-                                                  errorMsg,
-                                                  uploadSize,
-                                                  downloadSize);
+            _socket.reset();
+            if (_useConnectionPool)
+            {
+                _socket = HttpConnectionPool::getInstance().acquire(host, port, tls, _tlsOptions, errorMsg);
+            }
+            else
+            {
+                _socket = createSocket(tls, -1, errorMsg, _tlsOptions);
+            }
+
+            if (!_socket)
+            {
+                return std::make_shared<HttpResponse>(code,
+                                                      description,
+                                                      HttpErrorCode::CannotCreateSocket,
+                                                      headers,
+                                                      payload,
+                                                      errorMsg,
+                                                      uploadSize,
+                                                      downloadSize);
+            }
+
+            _socket->setProxyConfig(_proxyConfig);
         }
 
         // Build request string
@@ -213,6 +240,12 @@ namespace ix
         if (args->extraHeaders.find("Origin") == args->extraHeaders.end())
         {
             ss << "Origin: " << protocol << "://" << host << ":" << port << "\r\n";
+        }
+
+        // Set Connection header for Keep-Alive
+        if (args->extraHeaders.find("Connection") == args->extraHeaders.end())
+        {
+            ss << "Connection: " << (_keepAlive ? "keep-alive" : "close") << "\r\n";
         }
 
         if (verb == kPost || verb == kPut || verb == kPatch || _forceBody)
@@ -260,20 +293,30 @@ namespace ix
             return cancelled() || _stop;
         };
 
-        bool success = _socket->connect(host, port, errMsg, isCancellationRequested);
-        if (!success)
+        // Connect only if we don't have a reusable connection
+        if (!canReuse)
         {
-            auto errorCode = args->cancel ? HttpErrorCode::Cancelled : HttpErrorCode::CannotConnect;
-            std::stringstream ss;
-            ss << "Cannot connect to url: " << url << " / error : " << errMsg;
-            return std::make_shared<HttpResponse>(code,
-                                                  description,
-                                                  errorCode,
-                                                  headers,
-                                                  payload,
-                                                  ss.str(),
-                                                  uploadSize,
-                                                  downloadSize);
+            bool success = _socket->connect(host, port, errMsg, isCancellationRequested);
+
+            if (!success)
+            {
+                auto errorCode = args->cancel ? HttpErrorCode::Cancelled : HttpErrorCode::CannotConnect;
+                std::stringstream ss;
+                ss << "Cannot connect to url: " << url << " / error : " << errMsg;
+                return std::make_shared<HttpResponse>(code,
+                                                      description,
+                                                      errorCode,
+                                                      headers,
+                                                      payload,
+                                                      ss.str(),
+                                                      uploadSize,
+                                                      downloadSize);
+            }
+
+            // Save connection info for potential reuse
+            _lastHost = host;
+            _lastPort = port;
+            _lastTls = tls;
         }
 
         // Make a new cancellation object dealing with transfer timeout
@@ -308,11 +351,8 @@ namespace ix
 
         uploadSize = req.size();
 
-        auto lineResult = _socket->readLine(isCancellationRequested);
-        auto lineValid = lineResult.first;
-        auto line = lineResult.second;
-
-        if (!lineValid)
+        auto line = _socket->readLine(isCancellationRequested);
+        if (!line)
         {
             auto errorCode = args->cancel ? HttpErrorCode::Cancelled : HttpErrorCode::CannotReadStatusLine;
             std::string errorMsg("Cannot retrieve status line");
@@ -329,11 +369,11 @@ namespace ix
         if (args->verbose)
         {
             std::stringstream ss;
-            ss << "Status line " << line;
+            ss << "Status line " << *line;
             log(ss.str(), args);
         }
 
-        if (sscanf(line.c_str(), "HTTP/1.1 %d", &code) != 1)
+        if (sscanf(line->c_str(), "HTTP/1.1 %d", &code) != 1)
         {
             std::string errorMsg("Cannot parse response code from status line");
             return std::make_shared<HttpResponse>(code,
@@ -347,10 +387,7 @@ namespace ix
         }
 
         auto result = parseHttpHeaders(_socket, isCancellationRequested);
-        auto headersValid = result.first;
-        headers = result.second;
-
-        if (!headersValid)
+        if (!result)
         {
             auto errorCode = args->cancel ? HttpErrorCode::Cancelled : HttpErrorCode::HeaderParsingError;
             std::string errorMsg("Cannot parse http headers");
@@ -363,6 +400,7 @@ namespace ix
                                                   uploadSize,
                                                   downloadSize);
         }
+        headers = *result;
 
         // Redirect ?
         if ((code >= 301 && code <= 308) && args->followRedirects)
@@ -423,7 +461,7 @@ namespace ix
                                                   args->onProgressCallback,
                                                   args->onChunkCallback,
                                                   isCancellationRequested);
-            if (!chunkResult.first)
+            if (!chunkResult)
             {
                 auto errorCode = args->cancel ? HttpErrorCode::Cancelled : HttpErrorCode::ChunkReadError;
                 errorMsg = "Cannot read chunk";
@@ -440,7 +478,7 @@ namespace ix
             if (!args->onChunkCallback)
             {
                 payload.reserve(contentLength);
-                payload += chunkResult.second;
+                payload += *chunkResult;
             }
         }
         else if (headers.find("Transfer-Encoding") != headers.end() &&
@@ -451,10 +489,9 @@ namespace ix
             while (true)
             {
                 auto errorCode = args->cancel ? HttpErrorCode::Cancelled : HttpErrorCode::ChunkReadError;
-                lineResult = _socket->readLine(isCancellationRequested);
-                line = lineResult.second;
+                auto chunkLine = _socket->readLine(isCancellationRequested);
 
-                if (!lineResult.first)
+                if (!chunkLine)
                 {
                     return std::make_shared<HttpResponse>(code,
                                                           description,
@@ -468,7 +505,7 @@ namespace ix
 
                 uint64_t chunkSize;
                 ss.str("");
-                ss << std::hex << line;
+                ss << std::hex << *chunkLine;
                 ss >> chunkSize;
 
                 if (args->verbose)
@@ -483,7 +520,7 @@ namespace ix
                                                       args->onProgressCallback,
                                                       args->onChunkCallback,
                                                       isCancellationRequested);
-                if (!chunkResult.first)
+                if (!chunkResult)
                 {
                     auto errorCode = args->cancel ? HttpErrorCode::Cancelled : HttpErrorCode::ChunkReadError;
                     errorMsg = "Cannot read chunk";
@@ -500,13 +537,13 @@ namespace ix
                 if (!args->onChunkCallback)
                 {
                     payload.reserve(payload.size() + (size_t) chunkSize);
-                    payload += chunkResult.second;
+                    payload += *chunkResult;
                 }
 
                 // Read the line that terminates the chunk (\r\n)
-                lineResult = _socket->readLine(isCancellationRequested);
+                auto termLine = _socket->readLine(isCancellationRequested);
 
-                if (!lineResult.first)
+                if (!termLine)
                 {
                     auto errorCode = args->cancel ? HttpErrorCode::Cancelled : HttpErrorCode::ChunkReadError;
                     return std::make_shared<HttpResponse>(code,
@@ -570,6 +607,20 @@ namespace ix
                                                   uploadSize,
                                                   downloadSize);
 #endif
+        }
+
+        // Check if server wants to close the connection
+        bool serverClose = headers.find("Connection") != headers.end() &&
+            (headers["Connection"] == "close" || headers["Connection"] == "Close");
+
+        if (serverClose)
+        {
+            _socket.reset();
+        }
+        else if (_useConnectionPool && !_keepAlive && _socket)
+        {
+            // Release to pool if not keeping connection locally
+            HttpConnectionPool::getInstance().release(std::move(_socket), host, port, tls);
         }
 
         return std::make_shared<HttpResponse>(code,
@@ -781,5 +832,30 @@ namespace ix
         std::shuffle(str.begin(), str.end(), generator);
 
         return str;
+    }
+
+    bool HttpClient::isConnectionReusable(const std::string& host, int port, bool tls) const
+    {
+        return _lastHost == host && _lastPort == port && _lastTls == tls;
+    }
+
+    void HttpClient::setKeepAlive(bool enabled)
+    {
+        _keepAlive = enabled;
+    }
+
+    void HttpClient::setUseConnectionPool(bool enabled)
+    {
+        _useConnectionPool = enabled;
+    }
+
+    bool HttpClient::isKeepAliveEnabled() const
+    {
+        return _keepAlive;
+    }
+
+    bool HttpClient::isUseConnectionPoolEnabled() const
+    {
+        return _useConnectionPool;
     }
 } // namespace ix

@@ -14,6 +14,7 @@
 #include "IXSocketConnect.h"
 #include "IXSocketFactory.h"
 #include <assert.h>
+#include <optional>
 #include <sstream>
 #include <stdio.h>
 #include <string.h>
@@ -58,7 +59,7 @@ namespace ix
         fprintf(stdout, "%s\n", str.c_str());
     }
 
-    std::pair<bool, std::string> SocketServer::listen()
+    std::optional<std::string> SocketServer::listen()
     {
         std::string acceptSelectInterruptInitErrorMsg;
         if (!_acceptSelectInterrupt->init(acceptSelectInterruptInitErrorMsg))
@@ -66,15 +67,13 @@ namespace ix
             std::stringstream ss;
             ss << "SocketServer::listen() error in SelectInterrupt::init: "
                << acceptSelectInterruptInitErrorMsg;
-
-            return std::make_pair(false, ss.str());
+            return ss.str();
         }
 
         if (_addressFamily != AF_INET && _addressFamily != AF_INET6)
         {
-            std::string errMsg("SocketServer::listen() AF_INET and AF_INET6 are currently "
+            return std::string("SocketServer::listen() AF_INET and AF_INET6 are currently "
                                "the only supported address families");
-            return std::make_pair(false, errMsg);
         }
 
         // Get a socket for accepting connections.
@@ -82,8 +81,7 @@ namespace ix
         {
             std::stringstream ss;
             ss << "SocketServer::listen() error creating socket): " << strerror(Socket::getErrno());
-
-            return std::make_pair(false, ss.str());
+            return ss.str();
         }
 
         // Make that socket reusable. (allow restarting this server at will)
@@ -93,9 +91,8 @@ namespace ix
             std::stringstream ss;
             ss << "SocketServer::listen() error calling setsockopt(SO_REUSEADDR) "
                << "at address " << _host << ":" << _port << " : " << strerror(Socket::getErrno());
-
             Socket::closeSocket(_serverFd);
-            return std::make_pair(false, ss.str());
+            return ss.str();
         }
 
         if (_addressFamily == AF_INET)
@@ -111,9 +108,8 @@ namespace ix
                 ss << "SocketServer::listen() error calling inet_pton "
                    << "at address " << _host << ":" << _port << " : "
                    << strerror(Socket::getErrno());
-
                 Socket::closeSocket(_serverFd);
-                return std::make_pair(false, ss.str());
+                return ss.str();
             }
 
             // Bind the socket to the server address.
@@ -123,9 +119,8 @@ namespace ix
                 ss << "SocketServer::listen() error calling bind "
                    << "at address " << _host << ":" << _port << " : "
                    << strerror(Socket::getErrno());
-
                 Socket::closeSocket(_serverFd);
-                return std::make_pair(false, ss.str());
+                return ss.str();
             }
         }
         else // AF_INET6
@@ -141,9 +136,8 @@ namespace ix
                 ss << "SocketServer::listen() error calling inet_pton "
                    << "at address " << _host << ":" << _port << " : "
                    << strerror(Socket::getErrno());
-
                 Socket::closeSocket(_serverFd);
-                return std::make_pair(false, ss.str());
+                return ss.str();
             }
 
             // Bind the socket to the server address.
@@ -153,9 +147,8 @@ namespace ix
                 ss << "SocketServer::listen() error calling bind "
                    << "at address " << _host << ":" << _port << " : "
                    << strerror(Socket::getErrno());
-
                 Socket::closeSocket(_serverFd);
-                return std::make_pair(false, ss.str());
+                return ss.str();
             }
         }
 
@@ -167,12 +160,11 @@ namespace ix
             std::stringstream ss;
             ss << "SocketServer::listen() error calling listen "
                << "at address " << _host << ":" << _port << " : " << strerror(Socket::getErrno());
-
             Socket::closeSocket(_serverFd);
-            return std::make_pair(false, ss.str());
+            return ss.str();
         }
 
-        return std::make_pair(true, "");
+        return std::nullopt;  // success
     }
 
     void SocketServer::start()
@@ -308,9 +300,8 @@ namespace ix
             }
 
             // Accept a connection.
-            // FIXME: Is this working for ipv6 ?
-            struct sockaddr_in client; // client address information
-            int clientFd;              // socket connected to client
+            struct sockaddr_storage client;
+            int clientFd;
             socklen_t addressLen = sizeof(client);
             memset(&client, 0, sizeof(client));
 
@@ -344,10 +335,11 @@ namespace ix
             std::string remoteIp;
             int remotePort;
 
-            if (_addressFamily == AF_INET)
+            if (client.ss_family == AF_INET)
             {
+                auto* client4 = reinterpret_cast<struct sockaddr_in*>(&client);
                 char remoteIp4[INET_ADDRSTRLEN];
-                if (ix::inet_ntop(AF_INET, &client.sin_addr, remoteIp4, INET_ADDRSTRLEN) == nullptr)
+                if (ix::inet_ntop(AF_INET, &client4->sin_addr, remoteIp4, INET_ADDRSTRLEN) == nullptr)
                 {
                     int err = Socket::getErrno();
                     std::stringstream ss;
@@ -360,13 +352,14 @@ namespace ix
                     continue;
                 }
 
-                remotePort = ix::network_to_host_short(client.sin_port);
+                remotePort = ix::network_to_host_short(client4->sin_port);
                 remoteIp = remoteIp4;
             }
             else // AF_INET6
             {
+                auto* client6 = reinterpret_cast<struct sockaddr_in6*>(&client);
                 char remoteIp6[INET6_ADDRSTRLEN];
-                if (ix::inet_ntop(AF_INET6, &client.sin_addr, remoteIp6, INET6_ADDRSTRLEN) ==
+                if (ix::inet_ntop(AF_INET6, &client6->sin6_addr, remoteIp6, INET6_ADDRSTRLEN) ==
                     nullptr)
                 {
                     int err = Socket::getErrno();
@@ -380,7 +373,7 @@ namespace ix
                     continue;
                 }
 
-                remotePort = ix::network_to_host_short(client.sin_port);
+                remotePort = ix::network_to_host_short(client6->sin6_port);
                 remoteIp = remoteIp6;
             }
 

@@ -56,8 +56,16 @@
 
 namespace ix
 {
+    static std::string _customUserAgent;
+    static std::string _customServerHeader;
+
     std::string userAgent()
     {
+        if (!_customUserAgent.empty())
+        {
+            return _customUserAgent;
+        }
+
         std::stringstream ss;
 
         // IXWebSocket Version
@@ -85,5 +93,25 @@ namespace ix
 #endif
 
         return ss.str();
+    }
+
+    void setUserAgent(const std::string& userAgent)
+    {
+        _customUserAgent = userAgent;
+    }
+
+    void setServerHeader(const std::string& server)
+    {
+        _customServerHeader = server;
+    }
+
+    const std::string& getCustomUserAgent()
+    {
+        return _customUserAgent;
+    }
+
+    const std::string& getCustomServerHeader()
+    {
+        return _customServerHeader;
     }
 } // namespace ix

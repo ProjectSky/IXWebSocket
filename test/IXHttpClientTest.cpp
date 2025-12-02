@@ -112,8 +112,8 @@ TEST_CASE("http_client", "[http]")
             tlsOptionsServer.keyFile = "./.certs/wrong-name-server-key.pem";
             server.setTLSOptions(tlsOptionsServer);
 
-            auto res = server.listen();
-            REQUIRE(res.first);
+            auto err = server.listen();
+            REQUIRE(!err);
             server.start();
 
             HttpClient httpClient;

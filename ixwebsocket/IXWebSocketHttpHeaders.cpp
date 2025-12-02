@@ -9,10 +9,11 @@
 #include "IXSocket.h"
 #include <algorithm>
 #include <locale>
+#include <optional>
 
 namespace ix
 {
-    std::pair<bool, WebSocketHttpHeaders> parseHttpHeaders(
+    std::optional<WebSocketHttpHeaders> parseHttpHeaders(
         std::unique_ptr<Socket>& socket, const CancellationRequest& isCancellationRequested)
     {
         WebSocketHttpHeaders headers;
@@ -28,7 +29,7 @@ namespace ix
             {
                 if (!socket->readByte(line + i, isCancellationRequested))
                 {
-                    return std::make_pair(false, headers);
+                    return std::nullopt;
                 }
 
                 if (line[i] == ':' && colon == 0)
@@ -69,6 +70,6 @@ namespace ix
             }
         }
 
-        return std::make_pair(true, headers);
+        return headers;
     }
 } // namespace ix

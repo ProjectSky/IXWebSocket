@@ -17,8 +17,8 @@ TEST_CASE("IPv6")
                                    WebSocketServer::kDefaultHandShakeTimeoutSecs,
                                    AF_INET6);
 
-        auto res = server.listen();
-        CHECK(res.first);
+        auto err = server.listen();
+        CHECK(!err);
         server.start();
         server.stop();
     }

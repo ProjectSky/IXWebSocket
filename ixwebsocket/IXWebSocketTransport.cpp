@@ -71,7 +71,13 @@ namespace ix
         , _closingTimePoint(std::chrono::steady_clock::now())
         , _enablePong(kDefaultEnablePong)
         , _pingIntervalSecs(kDefaultPingIntervalSecs)
+        , _pingTimeoutSecs(-1)
+        , _idleTimeoutSecs(-1)
+        , _sendTimeoutSecs(300)
+        , _closeTimeoutMs(kClosingMaximumWaitingDelayInMs)
         , _pongReceived(false)
+        , _lastPongTimePoint(std::chrono::steady_clock::now())
+        , _lastActivityTimePoint(std::chrono::steady_clock::now())
         , _setCustomMessage(false)
         , _kPingMessage("ixwebsocket::heartbeat")
         , _pingType(SendMessageKind::Ping)
@@ -90,14 +96,24 @@ namespace ix
     void WebSocketTransport::configure(
         const WebSocketPerMessageDeflateOptions& perMessageDeflateOptions,
         const SocketTLSOptions& socketTLSOptions,
+        const ProxyConfig& proxyConfig,
         bool enablePong,
-        int pingIntervalSecs)
+        int pingIntervalSecs,
+        int pingTimeoutSecs,
+        int idleTimeoutSecs,
+        int sendTimeoutSecs,
+        int closeTimeoutSecs)
     {
         _perMessageDeflateOptions = perMessageDeflateOptions;
         _enablePerMessageDeflate = _perMessageDeflateOptions.enabled();
         _socketTLSOptions = socketTLSOptions;
+        _proxyConfig = proxyConfig;
         _enablePong = enablePong;
         _pingIntervalSecs = pingIntervalSecs;
+        _pingTimeoutSecs = pingTimeoutSecs;
+        _idleTimeoutSecs = idleTimeoutSecs;
+        _sendTimeoutSecs = sendTimeoutSecs;
+        _closeTimeoutMs = closeTimeoutSecs * 1000;
     }
 
     // Client
@@ -132,6 +148,8 @@ namespace ix
             {
                 return WebSocketInitResult(false, 0, errorMsg);
             }
+
+            _socket->setProxyConfig(_proxyConfig);
 
             WebSocketHandshake webSocketHandshake(_requestInitCancellation,
                                                   _socket,
@@ -172,7 +190,8 @@ namespace ix
     WebSocketInitResult WebSocketTransport::connectToSocket(std::unique_ptr<Socket> socket,
                                                             int timeoutSecs,
                                                             bool enablePerMessageDeflate,
-                                                            HttpRequestPtr request)
+                                                            HttpRequestPtr request,
+                                                            const std::vector<std::string>& subProtocols)
     {
         std::lock_guard<std::mutex> lock(_socketMutex);
 
@@ -190,7 +209,7 @@ namespace ix
                                               _enablePerMessageDeflate);
 
         auto result =
-            webSocketHandshake.serverHandshake(timeoutSecs, enablePerMessageDeflate, request);
+            webSocketHandshake.serverHandshake(timeoutSecs, enablePerMessageDeflate, request, subProtocols);
         if (result.success)
         {
             setReadyState(ReadyState::OPEN);
@@ -241,9 +260,18 @@ namespace ix
 
     void WebSocketTransport::initTimePointsAfterConnect()
     {
+        auto now = std::chrono::steady_clock::now();
         {
             std::lock_guard<std::mutex> lock(_lastSendPingTimePointMutex);
-            _lastSendPingTimePoint = std::chrono::steady_clock::now();
+            _lastSendPingTimePoint = now;
+        }
+        {
+            std::lock_guard<std::mutex> lock(_lastPongTimePointMutex);
+            _lastPongTimePoint = now;
+        }
+        {
+            std::lock_guard<std::mutex> lock(_lastActivityTimePointMutex);
+            _lastActivityTimePoint = now;
         }
     }
 
@@ -308,18 +336,45 @@ namespace ix
     {
         std::lock_guard<std::mutex> lock(_closingTimePointMutex);
         auto now = std::chrono::steady_clock::now();
-        return now - _closingTimePoint > std::chrono::milliseconds(kClosingMaximumWaitingDelayInMs);
+        return now - _closingTimePoint > std::chrono::milliseconds(_closeTimeoutMs);
     }
 
     WebSocketTransport::PollResult WebSocketTransport::poll()
     {
         if (_readyState == ReadyState::OPEN)
         {
+            // Check idle timeout
+            if (_idleTimeoutSecs > 0)
+            {
+                std::lock_guard<std::mutex> lock(_lastActivityTimePointMutex);
+                auto now = std::chrono::steady_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                    now - _lastActivityTimePoint).count();
+                if (elapsed >= _idleTimeoutSecs)
+                {
+                    close(WebSocketCloseConstants::kInternalErrorCode, "Idle timeout");
+                }
+            }
+
+            // Check ping timeout (independent of ping interval)
+            if (_pingTimeoutSecs > 0 && _pingType == SendMessageKind::Ping && !_pongReceived)
+            {
+                std::lock_guard<std::mutex> lock(_lastPongTimePointMutex);
+                auto now = std::chrono::steady_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                    now - _lastPongTimePoint).count();
+                if (elapsed >= _pingTimeoutSecs)
+                {
+                    close(WebSocketCloseConstants::kInternalErrorCode,
+                          WebSocketCloseConstants::kPingTimeoutMessage);
+                }
+            }
+
             if (pingIntervalExceeded())
             {
                 // If it is not a 'ping' message of ping type, there is no need to judge whether
-                // pong will receive it
-                if (_pingType == SendMessageKind::Ping && !_pongReceived)
+                // pong will receive it (legacy behavior when pingTimeoutSecs not set)
+                if (_pingTimeoutSecs <= 0 && _pingType == SendMessageKind::Ping && !_pongReceived)
                 {
                     // ping response (PONG) exceeds the maximum delay, close the connection
                     close(WebSocketCloseConstants::kInternalErrorCode,
@@ -347,9 +402,11 @@ namespace ix
         }
 
         // The platform may not have select interrupt capabilities, so wait with a small timeout
-        if (lastingTimeoutDelayInMs <= 0 && !_socket->isWakeUpFromPollSupported())
+        // Also need periodic wakeup for idle/ping timeout checks
+        if (lastingTimeoutDelayInMs <= 0 &&
+            (!_socket->isWakeUpFromPollSupported() || _idleTimeoutSecs > 0 || _pingTimeoutSecs > 0))
         {
-            lastingTimeoutDelayInMs = 20;
+            lastingTimeoutDelayInMs = 1000; // 1 second for timeout checks
         }
 
         // If we are requesting a cancellation, pass in a positive and small timeout
@@ -413,15 +470,30 @@ namespace ix
     {
         std::lock_guard<std::mutex> lock(_txbufMutex);
 
+        _txbuf.reserve(_txbuf.size() + header.size() + message_size);
         _txbuf.insert(_txbuf.end(), header.begin(), header.end());
-        _txbuf.insert(_txbuf.end(), begin, end);
 
         if (_useMask)
         {
-            for (size_t i = 0; i != (size_t) message_size; ++i)
+            size_t startPos = _txbuf.size();
+            _txbuf.insert(_txbuf.end(), begin, end);
+            uint8_t* data = _txbuf.data() + startPos;
+            size_t i = 0;
+            for (; i + 4 <= message_size; i += 4)
             {
-                *(_txbuf.end() - (size_t) message_size + i) ^= masking_key[i & 0x3];
+                data[i]     ^= masking_key[0];
+                data[i + 1] ^= masking_key[1];
+                data[i + 2] ^= masking_key[2];
+                data[i + 3] ^= masking_key[3];
             }
+            for (; i < message_size; ++i)
+            {
+                data[i] ^= masking_key[i & 0x3];
+            }
+        }
+        else
+        {
+            _txbuf.insert(_txbuf.end(), begin, end);
         }
     }
 
@@ -429,9 +501,18 @@ namespace ix
     {
         if (ws.mask)
         {
-            for (size_t j = 0; j != ws.N; ++j)
+            uint8_t* data = _rxbuf.data() + ws.header_size;
+            size_t j = 0;
+            for (; j + 4 <= ws.N; j += 4)
             {
-                _rxbuf[j + ws.header_size] ^= ws.masking_key[j & 0x3];
+                data[j]     ^= ws.masking_key[0];
+                data[j + 1] ^= ws.masking_key[1];
+                data[j + 2] ^= ws.masking_key[2];
+                data[j + 3] ^= ws.masking_key[3];
+            }
+            for (; j < ws.N; ++j)
+            {
+                data[j] ^= ws.masking_key[j & 0x3];
             }
         }
     }
@@ -563,8 +644,10 @@ namespace ix
             }
 
             unmaskReceiveBuffer(ws);
-            std::string frameData(_rxbuf.begin() + ws.header_size,
-                                  _rxbuf.begin() + ws.header_size + (size_t) ws.N);
+            std::string frameData;
+            frameData.reserve((size_t) ws.N);
+            frameData.assign(_rxbuf.begin() + ws.header_size,
+                             _rxbuf.begin() + ws.header_size + (size_t) ws.N);
 
             // We got a whole message, now do something with it:
             if (ws.opcode == wsheader_type::TEXT_FRAME ||
@@ -656,6 +739,10 @@ namespace ix
             else if (ws.opcode == wsheader_type::PONG)
             {
                 _pongReceived = true;
+                {
+                    std::lock_guard<std::mutex> lock(_lastPongTimePointMutex);
+                    _lastPongTimePoint = std::chrono::steady_clock::now();
+                }
                 emitMessage(MessageKind::PONG, frameData, false, onMessageCallback);
             }
             else if (ws.opcode == wsheader_type::CLOSE)
@@ -683,12 +770,13 @@ namespace ix
                     }
 
                     //
-                    // Validate close codes. Autobahn 7.9.*
-                    // 1014, 1015 are debattable. The firefox MSDN has a description for them.
-                    // Full list of status code and status range is defined in the dedicated
-                    // RFC section at https://tools.ietf.org/html/rfc6455#page-45
+                    // Validate close codes per RFC 6455 Section 7.4.1
+                    // Valid ranges: 1000-1003, 1007-1011, 3000-4999
+                    // Reserved (invalid on wire): 1004, 1005, 1006
+                    // Non-standard but accepted: 1012-1015 (used by some implementations)
                     //
-                    if (code < 1000 || code == 1004 || code == 1006 || (code > 1013 && code < 3000))
+                    if (code < 1000 || code == 1004 || code == 1005 || code == 1006 ||
+                        (code > 1015 && code < 3000) || code > 4999)
                     {
                         // build up an error message containing the bad error code
                         std::stringstream ss;
@@ -779,7 +867,7 @@ namespace ix
 
         for (auto&& chunk : _chunks)
         {
-            msg += chunk;
+            msg.append(chunk);
         }
 
         return msg;
@@ -790,6 +878,8 @@ namespace ix
                                          bool compressedMessage,
                                          const OnMessageCallback& onMessageCallback)
     {
+        std::lock_guard<std::mutex> lock(_lastActivityTimePointMutex);
+        _lastActivityTimePoint = std::chrono::steady_clock::now();
         size_t wireSize = message.size();
 
         // When the RSV1 bit is 1 it means the message is compressed
@@ -934,7 +1024,6 @@ namespace ix
         {
             wakeUpFromPoll(SelectInterrupt::kSendRequest);
 
-            // FIXME: we should have a timeout when sending large messages: see #131
             if (_blockingSend && !flushSendBuffer())
             {
                 success = false;
@@ -960,10 +1049,12 @@ namespace ix
         masking_key[2] = (x >> 8) & 0xff;
         masking_key[3] = (x) &0xff;
 
-        std::vector<uint8_t> header;
-        header.assign(2 + (message_size >= 126 ? 2 : 0) + (message_size >= 65536 ? 6 : 0) +
-                          (_useMask ? 4 : 0),
-                      0);
+        // Max header size: 2 + 8 (extended length) + 4 (mask) = 14 bytes
+        uint8_t headerBuf[14];
+        size_t headerSize = 2 + (message_size >= 126 ? 2 : 0) + (message_size >= 65536 ? 6 : 0) +
+                            (_useMask ? 4 : 0);
+        memset(headerBuf, 0, headerSize);
+        std::vector<uint8_t> header(headerBuf, headerBuf + headerSize);
         header[0] = type;
 
         // The fin bit indicate that this is the last fragment. Fin is French for end.
@@ -1242,8 +1333,17 @@ namespace ix
 
     bool WebSocketTransport::flushSendBuffer()
     {
+        auto start = std::chrono::steady_clock::now();
+
         while (!isSendBufferEmpty() && !_requestInitCancellation)
         {
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - start).count();
+            if (elapsed >= _sendTimeoutSecs)
+            {
+                return false;
+            }
+
             // Wait with a 10ms timeout until the socket is ready to write.
             // This way we are not busy looping
             PollResultType result = _socket->isReadyToWrite(10);
