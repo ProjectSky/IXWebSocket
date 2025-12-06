@@ -253,7 +253,7 @@ endif()
 
 if (WIN32)
   target_link_libraries(ixwebsocket PRIVATE wsock32 ws2_32 shlwapi)
-  target_compile_definitions(ixwebsocket PRIVATE _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(ixwebsocket PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX)
 
   if (USE_TLS)
     target_link_libraries(ixwebsocket PRIVATE Crypt32)

@@ -487,7 +487,7 @@ namespace ix
             ss << contentLengthIt->second;
             ss >> contentLength;
 
-            auto chunkResult = _socket->readBytes(contentLength,
+            auto chunkResult = _socket->readBytes(static_cast<size_t>(contentLength),
                                                   args->onProgressCallback,
                                                   args->onChunkCallback,
                                                   isCancellationRequested);
@@ -507,7 +507,7 @@ namespace ix
 
             if (!args->onChunkCallback)
             {
-                payload.reserve(contentLength);
+                payload.reserve(static_cast<size_t>(contentLength));
                 payload += *chunkResult;
             }
         }
