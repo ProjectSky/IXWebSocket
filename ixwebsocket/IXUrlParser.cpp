@@ -32,7 +32,7 @@
 #include "IXUrlParser.h"
 
 #include <algorithm>
-#include <cstdlib>
+#include <charconv>
 #include <cstring>
 
 namespace
@@ -104,9 +104,9 @@ namespace
             return false;
         }
 
-        int Port = atoi(m_Port.c_str());
-
-        if (Port <= 0 || Port > 65535)
+        int Port = 0;
+        auto [ptr, ec] = std::from_chars(m_Port.data(), m_Port.data() + m_Port.size(), Port);
+        if (ec != std::errc() || Port <= 0 || Port > 65535)
         {
             return false;
         }
@@ -403,6 +403,33 @@ namespace ix
         {
             path += "?";
             path += query;
+        }
+
+        return true;
+    }
+
+    bool UrlParser::parse(const std::string& url,
+                          std::string& protocol,
+                          std::string& host,
+                          std::string& path,
+                          std::string& query,
+                          int& port,
+                          std::string& username,
+                          std::string& password)
+    {
+        clParseURL res = clParseURL::ParseURL(url);
+        if (!res.IsValid()) return false;
+
+        protocol = res.m_Scheme;
+        host = res.m_Host;
+        path = res.m_Path;
+        query = res.m_Query;
+        username = res.m_UserName;
+        password = res.m_Password;
+
+        if (!res.GetPort(&port))
+        {
+            port = getProtocolPort(protocol);
         }
 
         return true;

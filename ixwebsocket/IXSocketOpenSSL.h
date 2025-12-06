@@ -33,8 +33,8 @@ namespace ix
                              const CancellationRequest& isCancellationRequested) final;
         virtual void close() final;
 
-        virtual ssize_t send(char* buffer, size_t length) final;
-        virtual ssize_t recv(void* buffer, size_t length) final;
+        virtual IoResult send(const char* buffer, size_t length) final;
+        virtual IoResult recv(void* buffer, size_t length) final;
 
     private:
         void openSSLInitialize();

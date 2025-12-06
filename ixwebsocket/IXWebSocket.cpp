@@ -13,7 +13,6 @@
 #include "IXUtf8Validator.h"
 #include "IXWebSocketHandshake.h"
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <cstdint>
 
@@ -90,8 +89,9 @@ namespace ix
         _extraHeaders = headers;
     }
 
-    const WebSocketHttpHeaders& WebSocket::getExtraHeaders() const
+    const WebSocketHttpHeaders WebSocket::getExtraHeaders() const
     {
+        std::lock_guard<std::mutex> lock(_configMutex);
         return _extraHeaders;
     }
 
@@ -114,8 +114,9 @@ namespace ix
         _socketTLSOptions = socketTLSOptions;
     }
 
-    const SocketTLSOptions& WebSocket::getTLSOptions() const
+    const SocketTLSOptions WebSocket::getTLSOptions() const
     {
+        std::lock_guard<std::mutex> lock(_configMutex);
         return _socketTLSOptions;
     }
 
@@ -125,8 +126,9 @@ namespace ix
         _proxyConfig = proxyConfig;
     }
 
-    const ProxyConfig& WebSocket::getProxyConfig() const
+    const ProxyConfig WebSocket::getProxyConfig() const
     {
+        std::lock_guard<std::mutex> lock(_configMutex);
         return _proxyConfig;
     }
 
@@ -149,20 +151,17 @@ namespace ix
     }
     void WebSocket::setPingInterval(int pingIntervalSecs)
     {
-        std::lock_guard<std::mutex> lock(_configMutex);
-        _pingIntervalSecs = pingIntervalSecs;
+        _pingIntervalSecs.store(pingIntervalSecs);
     }
 
     int WebSocket::getPingInterval() const
     {
-        std::lock_guard<std::mutex> lock(_configMutex);
-        return _pingIntervalSecs;
+        return _pingIntervalSecs.load();
     }
 
     void WebSocket::setPong(bool enabled)
     {
-        std::lock_guard<std::mutex> lock(_configMutex);
-        _enablePong = enabled;
+        _enablePong.store(enabled);
     }
 
     void WebSocket::setPerMessageDeflate(bool enabled)
@@ -513,29 +512,31 @@ namespace ix
 
     void WebSocket::setBackpressureCallback(const OnBackpressureCallback& callback)
     {
+        std::lock_guard<std::mutex> lock(_backpressureMutex);
         _onBackpressureCallback = callback;
     }
 
     void WebSocket::setBackpressureThreshold(size_t threshold)
     {
-        _backpressureThreshold = threshold;
+        _backpressureThreshold.store(threshold);
     }
 
     size_t WebSocket::getBackpressureThreshold() const
     {
-        return _backpressureThreshold;
+        return _backpressureThreshold.load();
     }
 
     void WebSocket::setTimeouts(const WebSocketTimeouts& timeouts)
     {
         std::lock_guard<std::mutex> lock(_configMutex);
         _timeouts = timeouts;
-        _pingIntervalSecs = timeouts.pingIntervalSecs;
-        _pingTimeoutSecs = timeouts.pingTimeoutSecs;
+        _pingIntervalSecs.store(timeouts.pingIntervalSecs);
+        _pingTimeoutSecs.store(timeouts.pingTimeoutSecs);
     }
 
-    const WebSocketTimeouts& WebSocket::getTimeouts() const
+    const WebSocketTimeouts WebSocket::getTimeouts() const
     {
+        std::lock_guard<std::mutex> lock(_configMutex);
         return _timeouts;
     }
 
@@ -670,14 +671,20 @@ namespace ix
         WebSocket::invokeTrafficTrackerCallback(webSocketSendInfo.wireSize, false);
 
         // Check backpressure
-        if (_backpressureThreshold > 0 && _onBackpressureCallback)
+        size_t threshold = _backpressureThreshold.load();
+        if (threshold > 0)
         {
             size_t currentBufferSize = _ws.bufferedAmount();
-            bool isAboveThreshold = currentBufferSize >= _backpressureThreshold;
-            if (isAboveThreshold != _backpressureActive)
+            bool isAboveThreshold = currentBufferSize >= threshold;
+            std::lock_guard<std::mutex> lock(_backpressureMutex);
+            bool wasActive = _backpressureActive.load();
+            if (isAboveThreshold != wasActive)
             {
-                _backpressureActive = isAboveThreshold;
-                _onBackpressureCallback(currentBufferSize, isAboveThreshold);
+                _backpressureActive.store(isAboveThreshold);
+                if (_onBackpressureCallback)
+                {
+                    _onBackpressureCallback(currentBufferSize, isAboveThreshold);
+                }
             }
         }
 
@@ -739,7 +746,7 @@ namespace ix
         _subProtocols.push_back(subProtocol);
     }
 
-    const std::vector<std::string>& WebSocket::getSubProtocols()
+    std::vector<std::string> WebSocket::getSubProtocols() const
     {
         std::lock_guard<std::mutex> lock(_configMutex);
         return _subProtocols;

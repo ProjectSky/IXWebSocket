@@ -8,8 +8,10 @@
 // emulate the interrupt event by using a short timeout with ix::poll() and
 // read from the SelectInterrupt. (see Socket::poll() "Emulation mode")
 //
-#include <algorithm>
 #include "IXSelectInterruptEvent.h"
+
+#include <algorithm>
+#include <optional>
 
 namespace ix
 {
@@ -45,22 +47,20 @@ namespace ix
         return true;
     }
 
-    uint64_t SelectInterruptEvent::read()
+    std::optional<uint64_t> SelectInterruptEvent::read()
     {
         std::lock_guard<std::mutex> lock(_valuesMutex);
 
-        if (_values.size() > 0)
-        {
-            uint64_t value = _values.front();
-            _values.pop_front();
+        if (_values.empty()) return std::nullopt;
+
+        uint64_t value = _values.front();
+        _values.pop_front();
 #ifdef _WIN32
-            // signal the event if there is still data in the queue
-            if (_values.size() == 0)
-                ResetEvent(_event);
+        // signal the event if there is still data in the queue
+        if (_values.empty())
+            ResetEvent(_event);
 #endif
-            return value;
-        }
-        return 0;
+        return value;
     }
 
     bool SelectInterruptEvent::clear()

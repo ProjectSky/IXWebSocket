@@ -6,7 +6,6 @@
 
 #include "IXGzipCodec.h"
 
-#include "IXBench.h"
 #include <array>
 #include <string.h>
 
@@ -21,8 +20,7 @@ namespace ix
 #ifndef IXWEBSOCKET_USE_ZLIB
         return std::string();
 #else
-        z_stream zs; // z_stream is zlib's control structure
-        memset(&zs, 0, sizeof(zs));
+        z_stream zs{}; // z_stream is zlib's control structure
 
         // deflateInit2 configure the file format: request gzip instead of deflate
         const int windowBits = 15;
@@ -76,14 +74,7 @@ namespace ix
 #ifndef IXWEBSOCKET_USE_ZLIB
         return false;
 #else
-        z_stream inflateState;
-        memset(&inflateState, 0, sizeof(inflateState));
-
-        inflateState.zalloc = Z_NULL;
-        inflateState.zfree = Z_NULL;
-        inflateState.opaque = Z_NULL;
-        inflateState.avail_in = 0;
-        inflateState.next_in = Z_NULL;
+        z_stream inflateState{};
 
         if (inflateInit2(&inflateState, 16 + MAX_WBITS) != Z_OK)
         {

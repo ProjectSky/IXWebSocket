@@ -14,7 +14,6 @@
 #include "IXUserAgent.h"
 #include "IXWebSocketHandshakeKeyGen.h"
 #include <algorithm>
-#include <iostream>
 #include <random>
 #include <sstream>
 #include <tuple>
@@ -138,9 +137,9 @@ namespace ix
             ss << "Origin: " << protocol << "://" << host << ":" << port << "\r\n";
         }
 
-        for (auto& it : extraHeaders)
+        for (const auto& [name, value] : extraHeaders)
         {
-            ss << it.first << ": " << it.second << "\r\n";
+            ss << name << ": " << value << "\r\n";
         }
 
         if (_enablePerMessageDeflate)
@@ -357,9 +356,10 @@ namespace ix
 
         // Handle sub-protocol negotiation
         std::string selectedProtocol;
-        if (!subProtocols.empty() && headers.find("sec-websocket-protocol") != headers.end())
+        auto protocolIt = headers.find("sec-websocket-protocol");
+        if (!subProtocols.empty() && protocolIt != headers.end())
         {
-            std::string clientProtocols = headers["sec-websocket-protocol"];
+            const std::string& clientProtocols = protocolIt->second;
             for (const auto& serverProtocol : subProtocols)
             {
                 if (clientProtocols.find(serverProtocol) != std::string::npos)

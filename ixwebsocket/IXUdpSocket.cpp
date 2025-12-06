@@ -14,10 +14,10 @@ namespace ix
 {
     UdpSocket::UdpSocket(int fd)
         : _sockfd(fd)
+        , _server{}
         , _serverLen(0)
         , _addressFamily(AF_INET)
     {
-        memset(&_server, 0, sizeof(_server));
     }
 
     UdpSocket::~UdpSocket()
@@ -70,8 +70,7 @@ namespace ix
     bool UdpSocket::init(const std::string& host, int port, std::string& errMsg)
     {
         // DNS resolution with IPv4/IPv6 support
-        struct addrinfo hints, *result = nullptr;
-        memset(&hints, 0, sizeof(hints));
+        struct addrinfo hints{}, *result = nullptr;
         hints.ai_family = AF_UNSPEC;
         hints.ai_socktype = SOCK_DGRAM;
 
@@ -100,7 +99,7 @@ namespace ix
         fcntl(_sockfd, F_SETFL, O_NONBLOCK);
 #endif
 
-        memset(&_server, 0, sizeof(_server));
+        _server = {};
         memcpy(&_server, result->ai_addr, result->ai_addrlen);
         _serverLen = result->ai_addrlen;
         freeaddrinfo(result);
@@ -108,20 +107,28 @@ namespace ix
         return true;
     }
 
-    ssize_t UdpSocket::sendto(const std::string& buffer)
+    IoResult UdpSocket::sendto(const std::string& buffer)
     {
-        return (ssize_t)::sendto(
+        auto ret = ::sendto(
             _sockfd, buffer.data(), buffer.size(), 0, (struct sockaddr*) &_server, _serverLen);
+        if (ret > 0) return {static_cast<size_t>(ret), IoError::Success};
+        if (ret == 0) return {0, IoError::ConnectionClosed};
+        if (isWaitNeeded()) return {0, IoError::WouldBlock};
+        return {0, IoError::Error};
     }
 
-    ssize_t UdpSocket::recvfrom(char* buffer, size_t length)
+    IoResult UdpSocket::recvfrom(char* buffer, size_t length)
     {
 #ifdef _WIN32
         int addressLen = (int) _serverLen;
 #else
         socklen_t addressLen = _serverLen;
 #endif
-        return (ssize_t)::recvfrom(
+        auto ret = ::recvfrom(
             _sockfd, buffer, length, 0, (struct sockaddr*) &_server, &addressLen);
+        if (ret > 0) return {static_cast<size_t>(ret), IoError::Success};
+        if (ret == 0) return {0, IoError::ConnectionClosed};
+        if (isWaitNeeded()) return {0, IoError::WouldBlock};
+        return {0, IoError::Error};
     }
 } // namespace ix

@@ -40,7 +40,7 @@ namespace ix
         std::array<unsigned char, 1 << 14> _compressBuffer;
 
 #ifdef IXWEBSOCKET_USE_ZLIB
-        z_stream _deflateState;
+        z_stream _deflateState{};
 #endif
     };
 
@@ -58,7 +58,7 @@ namespace ix
         std::array<unsigned char, 1 << 14> _compressBuffer;
 
 #ifdef IXWEBSOCKET_USE_ZLIB
-        z_stream _inflateState;
+        z_stream _inflateState{};
 #endif
     };
 

@@ -163,7 +163,6 @@ namespace ix
         }
         else
         {
-            // FIXME: should we call mbedtls_ssl_conf_verify ?
             mbedtls_ssl_conf_authmode(&_conf, MBEDTLS_SSL_VERIFY_REQUIRED);
 
             if (_tlsOptions.isUsingSystemDefaults())
@@ -347,50 +346,35 @@ namespace ix
         Socket::close();
     }
 
-    ssize_t SocketMbedTLS::send(char* buf, size_t nbyte)
+    IoResult SocketMbedTLS::send(const char* buf, size_t nbyte)
     {
         std::lock_guard<std::mutex> lock(_mutex);
 
-        ssize_t res = mbedtls_ssl_write(&_ssl, (unsigned char*) buf, nbyte);
+        int res = mbedtls_ssl_write(&_ssl, (const unsigned char*) buf, nbyte);
 
-        if (res > 0)
+        if (res > 0) return {static_cast<size_t>(res), IoError::Success};
+        if (res == MBEDTLS_ERR_SSL_WANT_READ || res == MBEDTLS_ERR_SSL_WANT_WRITE)
         {
-            return res;
+            return {0, IoError::WouldBlock};
         }
-        else if (res == MBEDTLS_ERR_SSL_WANT_READ || res == MBEDTLS_ERR_SSL_WANT_WRITE)
-        {
-            errno = EWOULDBLOCK;
-            return -1;
-        }
-        else
-        {
-            return -1;
-        }
+        return {0, IoError::Error};
     }
 
-    ssize_t SocketMbedTLS::recv(void* buf, size_t nbyte)
+    IoResult SocketMbedTLS::recv(void* buf, size_t nbyte)
     {
         while (true)
         {
             std::lock_guard<std::mutex> lock(_mutex);
 
-            ssize_t res = mbedtls_ssl_read(&_ssl, (unsigned char*) buf, (int) nbyte);
+            int res = mbedtls_ssl_read(&_ssl, (unsigned char*) buf, (int) nbyte);
 
-            if (res > 0)
-            {
-                return res;
-            }
-
-            if (res == 0)
-            {
-                errno = ECONNRESET;
-            }
-
+            if (res > 0) return {static_cast<size_t>(res), IoError::Success};
+            if (res == 0) return {0, IoError::ConnectionClosed};
             if (res == MBEDTLS_ERR_SSL_WANT_READ || res == MBEDTLS_ERR_SSL_WANT_WRITE)
             {
-                errno = EWOULDBLOCK;
+                return {0, IoError::WouldBlock};
             }
-            return -1;
+            return {0, IoError::Error};
         }
     }
 

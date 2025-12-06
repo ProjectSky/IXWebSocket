@@ -82,6 +82,7 @@ set( IXWEBSOCKET_HEADERS
     ixwebsocket/IXHttpClient.h
     ixwebsocket/IXHttpConnectionPool.h
     ixwebsocket/IXHttpServer.h
+    ixwebsocket/IXIoResult.h
     ixwebsocket/IXNetSystem.h
     ixwebsocket/IXProgressCallback.h
     ixwebsocket/IXProxyConfig.h

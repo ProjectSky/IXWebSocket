@@ -18,14 +18,8 @@
 #include <sys/types.h>
 #endif
 
-#ifdef _WIN32
-#include <basetsd.h>
-#ifdef _MSC_VER
-typedef SSIZE_T ssize_t;
-#endif
-#endif
-
 #include "IXCancellationRequest.h"
+#include "IXIoResult.h"
 #include "IXProgressCallback.h"
 #include "IXProxyConfig.h"
 #include "IXSelectInterrupt.h"
@@ -67,9 +61,9 @@ namespace ix
         virtual void close();
         bool isOpen() const;
 
-        virtual ssize_t send(char* buffer, size_t length);
-        ssize_t send(const std::string& buffer);
-        virtual ssize_t recv(void* buffer, size_t length);
+        virtual IoResult send(const char* buffer, size_t length);
+        IoResult send(const std::string& buffer);
+        virtual IoResult recv(void* buffer, size_t length);
 
         // Blocking and cancellable versions, working with socket that can be set
         // to non blocking mode. Used during HTTP upgrade.

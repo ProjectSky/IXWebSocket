@@ -14,10 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <optional>
-#include <assert.h>
 #include <fcntl.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <vector>
@@ -60,8 +57,7 @@ namespace ix
         // https://github.com/mpv-player/mpv/pull/5203/files for such a select wrapper.
         //
         nfds_t nfds = 1;
-        struct pollfd fds[2];
-        memset(fds, 0, sizeof(fds));
+        struct pollfd fds[2]{};
 
         fds[0].fd = sockfd;
         fds[0].events = (readyToRead) ? POLLIN : POLLOUT;
@@ -160,14 +156,15 @@ namespace ix
     bool Socket::readSelectInterruptRequest(const SelectInterruptPtr& selectInterrupt,
                                             PollResultType* pollResult)
     {
-        uint64_t value = selectInterrupt->read();
+        auto value = selectInterrupt->read();
+        if (!value) return false;
 
-        if (value == SelectInterrupt::kSendRequest)
+        if (*value == SelectInterrupt::kSendRequest)
         {
             *pollResult = PollResultType::SendRequest;
             return true;
         }
-        else if (value == SelectInterrupt::kCloseRequest)
+        else if (*value == SelectInterrupt::kCloseRequest)
         {
             *pollResult = PollResultType::CloseRequest;
             return true;
@@ -280,29 +277,37 @@ namespace ix
         return _sockfd != -1;
     }
 
-    ssize_t Socket::send(char* buffer, size_t length)
+    IoResult Socket::send(const char* buffer, size_t length)
     {
         int flags = 0;
 #ifdef MSG_NOSIGNAL
         flags = MSG_NOSIGNAL;
 #endif
 
-        return ::send(_sockfd, buffer, length, flags);
+        auto ret = ::send(_sockfd, buffer, length, flags);
+        if (ret > 0) return {static_cast<size_t>(ret), IoError::Success};
+        if (ret == 0) return {0, IoError::ConnectionClosed};
+        if (isWaitNeeded()) return {0, IoError::WouldBlock};
+        return {0, IoError::Error};
     }
 
-    ssize_t Socket::send(const std::string& buffer)
+    IoResult Socket::send(const std::string& buffer)
     {
-        return send((char*) &buffer[0], buffer.size());
+        return send(buffer.data(), buffer.size());
     }
 
-    ssize_t Socket::recv(void* buffer, size_t length)
+    IoResult Socket::recv(void* buffer, size_t length)
     {
         int flags = 0;
 #ifdef MSG_NOSIGNAL
         flags = MSG_NOSIGNAL;
 #endif
 
-        return ::recv(_sockfd, (char*) buffer, length, flags);
+        auto ret = ::recv(_sockfd, (char*) buffer, length, flags);
+        if (ret > 0) return {static_cast<size_t>(ret), IoError::Success};
+        if (ret == 0) return {0, IoError::ConnectionClosed};
+        if (isWaitNeeded()) return {0, IoError::WouldBlock};
+        return {0, IoError::Error};
     }
 
     int Socket::getErrno()
@@ -347,39 +352,28 @@ namespace ix
     bool Socket::writeBytes(const std::string& str,
                             const CancellationRequest& isCancellationRequested)
     {
-        int offset = 0;
-        int len = (int) str.size();
+        size_t offset = 0;
+        size_t len = str.size();
 
         while (true)
         {
             if (isCancellationRequested && isCancellationRequested()) return false;
 
-            ssize_t ret = send((char*) &str[offset], len);
+            auto result = send((char*) &str[offset], len);
 
-            // We wrote some bytes, as needed, all good.
-            if (ret > 0)
+            if (result)
             {
-                if (ret == len)
-                {
-                    return true;
-                }
-                else
-                {
-                    offset += ret;
-                    len -= ret;
-                    continue;
-                }
-            }
-            // There is possibly something to be writen, try again
-            else if (ret < 0 && Socket::isWaitNeeded())
-            {
+                if (result.bytes == len) return true;
+                offset += result.bytes;
+                len -= result.bytes;
                 continue;
             }
-            // There was an error during the write, abort
-            else
+            if (result.wouldBlock())
             {
-                return false;
+                if (isReadyToWrite(1) == PollResultType::Error) return false;
+                continue;
             }
+            return false;
         }
     }
 
@@ -389,40 +383,27 @@ namespace ix
         {
             if (isCancellationRequested && isCancellationRequested()) return false;
 
-            ssize_t ret;
-            ret = recv(buffer, 1);
+            auto result = recv(buffer, 1);
 
-            // We read one byte, as needed, all good.
-            if (ret == 1)
+            if (result && result.bytes == 1) return true;
+            if (result.wouldBlock())
             {
-                return true;
+                if (isReadyToRead(1) == PollResultType::Error) return false;
+                continue;
             }
-            // There is possibly something to be read, try again
-            else if (ret < 0 && Socket::isWaitNeeded())
-            {
-                // Wait with a 1ms timeout until the socket is ready to read.
-                // This way we are not busy looping
-                if (isReadyToRead(1) == PollResultType::Error)
-                {
-                    return false;
-                }
-            }
-            // There was an error during the read, abort
-            else
-            {
-                return false;
-            }
+            return false;
         }
     }
 
     std::optional<std::string> Socket::readLine(
         const CancellationRequest& isCancellationRequested)
     {
+        constexpr size_t maxLineLength = 8192;
         char c;
         std::string line;
         line.reserve(64);
 
-        for (int i = 0; i < 2 || (line[i - 2] != '\r' && line[i - 1] != '\n'); ++i)
+        while (line.size() < maxLineLength)
         {
             if (!readByte(&c, isCancellationRequested))
             {
@@ -430,9 +411,15 @@ namespace ix
             }
 
             line += c;
+            const size_t currentSize = line.size();
+
+            if (currentSize >= 2 && line[currentSize - 2] == '\r' && line[currentSize - 1] == '\n')
+            {
+                return line;
+            }
         }
 
-        return line;
+        return std::nullopt;
     }
 
     std::optional<std::string> Socket::readBytes(
@@ -443,6 +430,10 @@ namespace ix
     {
         std::array<uint8_t, 1 << 14> readBuffer;
         std::vector<uint8_t> output;
+        if (!onChunkCallback)
+        {
+            output.reserve(length);
+        }
         size_t bytesRead = 0;
 
         while (bytesRead != length)
@@ -453,31 +444,28 @@ namespace ix
             }
 
             size_t size = std::min(readBuffer.size(), length - bytesRead);
-            ssize_t ret = recv((char*) &readBuffer[0], size);
+            auto result = recv((char*) &readBuffer[0], size);
 
-            if (ret > 0)
+            if (result)
             {
                 if (onChunkCallback)
                 {
-                    std::string chunk(readBuffer.begin(), readBuffer.begin() + ret);
+                    std::string chunk(readBuffer.begin(), readBuffer.begin() + result.bytes);
                     onChunkCallback(chunk);
                 }
                 else
                 {
-                    output.insert(output.end(), readBuffer.begin(), readBuffer.begin() + ret);
+                    output.insert(output.end(), readBuffer.begin(), readBuffer.begin() + result.bytes);
                 }
-                bytesRead += ret;
+                bytesRead += result.bytes;
+
+                if (onProgressCallback) onProgressCallback((int) bytesRead, (int) length);
             }
-            else if (ret <= 0 && !Socket::isWaitNeeded())
+            else if (result.wouldBlock())
             {
-                return std::nullopt;
+                if (isReadyToRead(1) == PollResultType::Error) return std::nullopt;
             }
-
-            if (onProgressCallback) onProgressCallback((int) bytesRead, (int) length);
-
-            // Wait with a 1ms timeout until the socket is ready to read.
-            // This way we are not busy looping
-            if (isReadyToRead(1) == PollResultType::Error)
+            else
             {
                 return std::nullopt;
             }

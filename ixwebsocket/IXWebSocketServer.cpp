@@ -48,9 +48,9 @@ namespace ix
         stopAcceptingConnections();
 
         auto clients = getClients();
-        for (const auto& pair : clients)
+        for (const auto& [webSocket, connectionState] : clients)
         {
-            pair.first->close();
+            webSocket->close();
         }
 
         SocketServer::stop();
@@ -242,11 +242,11 @@ namespace ix
     std::shared_ptr<WebSocket> WebSocketServer::getClientById(const std::string& id)
     {
         std::lock_guard<std::mutex> lock(_clientsMutex);
-        for (const auto& pair : _clients)
+        for (const auto& [webSocket, connectionState] : _clients)
         {
-            if (pair.second && pair.second->getId() == id)
+            if (connectionState && connectionState->getId() == id)
             {
-                return pair.first;
+                return webSocket;
             }
         }
         return nullptr;
@@ -271,18 +271,18 @@ namespace ix
                 auto remoteIp = connectionState->getRemoteIp();
                 if (msg->type == ix::WebSocketMessageType::Message)
                 {
-                    for (auto&& pair : getClients())
+                    for (auto&& [client, state] : getClients())
                     {
-                        if (pair.first.get() != &webSocket)
+                        if (client.get() != &webSocket)
                         {
-                            pair.first->send(msg->str, msg->binary);
+                            client->send(msg->str, msg->binary);
 
                             // Make sure the OS send buffer is flushed before moving on
                             do
                             {
                                 std::chrono::duration<double, std::milli> duration(500);
                                 std::this_thread::sleep_for(duration);
-                            } while (pair.first->bufferedAmount() != 0);
+                            } while (client->bufferedAmount() != 0);
                         }
                     }
                 }
@@ -292,11 +292,11 @@ namespace ix
     void WebSocketServer::broadcast(const std::string& data, bool binary, WebSocket* exclude)
     {
         auto clients = getClients();
-        for (const auto& pair : clients)
+        for (const auto& [client, state] : clients)
         {
-            if (pair.first.get() != exclude)
+            if (client.get() != exclude)
             {
-                pair.first->send(data, binary);
+                client->send(data, binary);
             }
         }
     }

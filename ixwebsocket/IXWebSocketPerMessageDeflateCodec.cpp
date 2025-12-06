@@ -7,7 +7,6 @@
 #include "IXWebSocketPerMessageDeflateCodec.h"
 
 #include "IXWebSocketPerMessageDeflateOptions.h"
-#include <cassert>
 #include <string.h>
 
 namespace
@@ -25,13 +24,6 @@ namespace ix
     //
     WebSocketPerMessageDeflateCompressor::WebSocketPerMessageDeflateCompressor()
     {
-#ifdef IXWEBSOCKET_USE_ZLIB
-        memset(&_deflateState, 0, sizeof(_deflateState));
-
-        _deflateState.zalloc = Z_NULL;
-        _deflateState.zfree = Z_NULL;
-        _deflateState.opaque = Z_NULL;
-#endif
     }
 
     WebSocketPerMessageDeflateCompressor::~WebSocketPerMessageDeflateCompressor()
@@ -172,15 +164,6 @@ namespace ix
     //
     WebSocketPerMessageDeflateDecompressor::WebSocketPerMessageDeflateDecompressor()
     {
-#ifdef IXWEBSOCKET_USE_ZLIB
-        memset(&_inflateState, 0, sizeof(_inflateState));
-
-        _inflateState.zalloc = Z_NULL;
-        _inflateState.zfree = Z_NULL;
-        _inflateState.opaque = Z_NULL;
-        _inflateState.avail_in = 0;
-        _inflateState.next_in = Z_NULL;
-#endif
     }
 
     WebSocketPerMessageDeflateDecompressor::~WebSocketPerMessageDeflateDecompressor()

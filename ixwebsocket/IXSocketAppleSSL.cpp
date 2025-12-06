@@ -16,8 +16,6 @@
 #include <netdb.h>
 #include <netinet/tcp.h>
 #include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -77,7 +75,7 @@ namespace ix
 
         size_t requested_sz = *len;
 
-        ssize_t status = read(fd, data, requested_sz);
+        auto status = read(fd, data, requested_sz);
 
         if (status > 0)
         {
@@ -124,7 +122,7 @@ namespace ix
         assert(len != nullptr);
 
         size_t to_write_sz = *len;
-        ssize_t status = write(fd, data, to_write_sz);
+        auto status = write(fd, data, to_write_sz);
 
         if (status > 0)
         {
@@ -268,7 +266,7 @@ namespace ix
         Socket::close();
     }
 
-    ssize_t SocketAppleSSL::send(char* buf, size_t nbyte)
+    IoResult SocketAppleSSL::send(const char* buf, size_t nbyte)
     {
         OSStatus status = errSSLWouldBlock;
         while (status == errSSLWouldBlock)
@@ -277,28 +275,23 @@ namespace ix
             std::lock_guard<std::mutex> lock(_mutex);
             status = SSLWrite(_sslContext, buf, nbyte, &processed);
 
-            if (processed > 0) return (ssize_t) processed;
+            if (processed > 0) return {processed, IoError::Success};
 
-            // The connection was reset, inform the caller that this
-            // Socket should close
             if (status == errSSLClosedGraceful || status == errSSLClosedNoNotify ||
                 status == errSSLClosedAbort)
             {
-                errno = ECONNRESET;
-                return -1;
+                return {0, IoError::ConnectionClosed};
             }
 
             if (status == errSSLWouldBlock)
             {
-                errno = EWOULDBLOCK;
-                return -1;
+                return {0, IoError::WouldBlock};
             }
         }
-        return -1;
+        return {0, IoError::Error};
     }
 
-    // No wait support
-    ssize_t SocketAppleSSL::recv(void* buf, size_t nbyte)
+    IoResult SocketAppleSSL::recv(void* buf, size_t nbyte)
     {
         OSStatus status = errSSLWouldBlock;
         while (status == errSSLWouldBlock)
@@ -307,24 +300,20 @@ namespace ix
             std::lock_guard<std::mutex> lock(_mutex);
             status = SSLRead(_sslContext, buf, nbyte, &processed);
 
-            if (processed > 0) return (ssize_t) processed;
+            if (processed > 0) return {processed, IoError::Success};
 
-            // The connection was reset, inform the caller that this
-            // Socket should close
             if (status == errSSLClosedGraceful || status == errSSLClosedNoNotify ||
                 status == errSSLClosedAbort)
             {
-                errno = ECONNRESET;
-                return -1;
+                return {0, IoError::ConnectionClosed};
             }
 
             if (status == errSSLWouldBlock)
             {
-                errno = EWOULDBLOCK;
-                return -1;
+                return {0, IoError::WouldBlock};
             }
         }
-        return -1;
+        return {0, IoError::Error};
     }
 
 } // namespace ix

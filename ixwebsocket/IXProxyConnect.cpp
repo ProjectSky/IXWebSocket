@@ -1,21 +1,16 @@
 /*
  *  IXProxyConnect.cpp
  *  Author: ProjectSky
- *  Copyright (c) 2024 Machine Zone, Inc. All rights reserved.
+ *  Copyright (c) 2025 SkyServers. All rights reserved.
  */
 
 #include "IXProxyConnect.h"
 #include "IXBase64.h"
 #include "IXNetSystem.h"
+#include "IXSocket.h"
+#include <charconv>
 #include <cstring>
 #include <sstream>
-
-#ifndef _WIN32
-#include <unistd.h>
-#include <sys/socket.h>
-#include <poll.h>
-#include <errno.h>
-#endif
 
 namespace ix
 {
@@ -33,14 +28,18 @@ namespace ix
 #ifdef MSG_NOSIGNAL
             flags = MSG_NOSIGNAL;
 #endif
-            ssize_t ret = ::send(sockfd, data.c_str() + offset, len - offset, flags);
+            auto ret = ::send(sockfd, data.c_str() + offset, len - offset, flags);
 
             if (ret > 0)
             {
                 offset += ret;
             }
-            else if (ret < 0 && (errno == EWOULDBLOCK || errno == EAGAIN))
+            else if (ret < 0 && Socket::isWaitNeeded())
             {
+                struct pollfd pfd;
+                pfd.fd = sockfd;
+                pfd.events = POLLOUT;
+                ix::poll(&pfd, 1, 100, nullptr);
                 continue;
             }
             else
@@ -65,13 +64,13 @@ namespace ix
 #ifdef MSG_NOSIGNAL
             flags = MSG_NOSIGNAL;
 #endif
-            ssize_t ret = ::recv(sockfd, buf + offset, len - offset, flags);
+            auto ret = ::recv(sockfd, buf + offset, len - offset, flags);
 
             if (ret > 0)
             {
                 offset += ret;
             }
-            else if (ret < 0 && (errno == EWOULDBLOCK || errno == EAGAIN))
+            else if (ret < 0 && Socket::isWaitNeeded())
             {
                 struct pollfd pfd;
                 pfd.fd = sockfd;
@@ -157,7 +156,17 @@ namespace ix
         int statusCode = 0;
         if (statusLine.find("HTTP/1.") == 0 && statusLine.size() >= 12)
         {
-            statusCode = std::stoi(statusLine.substr(9, 3));
+            auto result = std::from_chars(statusLine.data() + 9, statusLine.data() + 12, statusCode);
+            if (result.ec != std::errc())
+            {
+                errMsg = "Failed to parse proxy response status code";
+                return false;
+            }
+        }
+        else
+        {
+            errMsg = "Invalid proxy response: " + statusLine;
+            return false;
         }
 
         // Read and discard headers
@@ -235,6 +244,12 @@ namespace ix
                 return false;
             }
 
+            if (proxy.username.size() > 255 || proxy.password.size() > 255)
+            {
+                errMsg = "SOCKS5 username or password exceeds 255 bytes";
+                return false;
+            }
+
             std::string authRequest;
             authRequest.push_back(0x01); // Auth version
             authRequest.push_back(static_cast<char>(proxy.username.size()));
@@ -263,6 +278,12 @@ namespace ix
         }
 
         // Step 4: Send connect request
+        if (targetHost.size() > 255)
+        {
+            errMsg = "SOCKS5 target host exceeds 255 bytes";
+            return false;
+        }
+
         std::string connectRequest;
         connectRequest.push_back(0x05); // Version
         connectRequest.push_back(0x01); // Connect command

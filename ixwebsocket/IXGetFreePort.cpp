@@ -6,11 +6,10 @@
 
 #include "IXGetFreePort.h"
 
-#include <ixwebsocket/IXNetSystem.h>
-#include <ixwebsocket/IXSocket.h>
+#include "IXNetSystem.h"
+#include "IXSocket.h"
 #include <cstring>
 #include <random>
-#include <string>
 
 namespace ix
 {
@@ -41,8 +40,7 @@ namespace ix
         int port = -1;
         if (addressFamily == AF_INET)
         {
-            struct sockaddr_in server;
-            memset(&server, 0, sizeof(server));
+            struct sockaddr_in server{};
             server.sin_family = AF_INET;
             server.sin_port = htons(0);
             server.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -64,8 +62,7 @@ namespace ix
         }
         else // AF_INET6
         {
-            struct sockaddr_in6 server;
-            memset(&server, 0, sizeof(server));
+            struct sockaddr_in6 server{};
             server.sin6_family = AF_INET6;
             server.sin6_port = htons(0);
             server.sin6_addr = in6addr_loopback;

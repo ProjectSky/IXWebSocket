@@ -22,4 +22,6 @@ namespace ix
 
         bool operator()(const std::string& s1, const std::string& s2) const;
     };
+
+    bool caseInsensitiveEquals(const std::string& a, const std::string& b);
 } // namespace ix

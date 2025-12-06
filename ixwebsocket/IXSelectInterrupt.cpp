@@ -6,6 +6,8 @@
 
 #include "IXSelectInterrupt.h"
 
+#include <optional>
+
 namespace ix
 {
     const uint64_t SelectInterrupt::kSendRequest = 1;
@@ -31,9 +33,9 @@ namespace ix
         return true;
     }
 
-    uint64_t SelectInterrupt::read()
+    std::optional<uint64_t> SelectInterrupt::read()
     {
-        return 0;
+        return std::nullopt;
     }
 
     bool SelectInterrupt::clear()

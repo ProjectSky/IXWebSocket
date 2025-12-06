@@ -1,7 +1,7 @@
 /*
  *  IXHttpConnectionPool.cpp
  *  Author: ProjectSky
- *  Copyright (c) 2019 Machine Zone, Inc. All rights reserved.
+ *  Copyright (c) 2025 SkyServers. All rights reserved.
  */
 
 #include "IXHttpConnectionPool.h"
@@ -53,13 +53,18 @@ namespace ix
 
         std::string key = makeKey(host, port, tls);
         auto it = _pool.find(key);
-        if (it != _pool.end() && !it->second.empty())
+        if (it != _pool.end())
         {
-            auto socket = std::move(it->second.back().socket);
-            it->second.pop_back();
-            if (socket && socket->isOpen())
+            // Try to find a valid socket from the pool
+            while (!it->second.empty())
             {
-                return socket;
+                auto socket = std::move(it->second.back().socket);
+                it->second.pop_back();
+                if (socket && socket->isOpen())
+                {
+                    return socket;
+                }
+                // Socket was closed, try next one
             }
         }
 

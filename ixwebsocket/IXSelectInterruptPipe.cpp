@@ -13,8 +13,10 @@
 #include "IXSelectInterruptPipe.h"
 
 #include <assert.h>
+#include <cstddef>
 #include <errno.h>
 #include <fcntl.h>
+#include <optional>
 #include <sstream>
 #include <string.h> // for strerror
 #include <unistd.h> // for write
@@ -68,6 +70,8 @@ namespace ix
                << " : " << strerror(errno);
             errorMsg = ss.str();
 
+            ::close(_fildes[kPipeReadIndex]);
+            ::close(_fildes[kPipeWriteIndex]);
             _fildes[kPipeReadIndex] = -1;
             _fildes[kPipeWriteIndex] = -1;
             return false;
@@ -80,6 +84,8 @@ namespace ix
                << " : " << strerror(errno);
             errorMsg = ss.str();
 
+            ::close(_fildes[kPipeReadIndex]);
+            ::close(_fildes[kPipeWriteIndex]);
             _fildes[kPipeReadIndex] = -1;
             _fildes[kPipeWriteIndex] = -1;
             return false;
@@ -93,6 +99,8 @@ namespace ix
                << " : " << strerror(errno);
             errorMsg = ss.str();
 
+            ::close(_fildes[kPipeReadIndex]);
+            ::close(_fildes[kPipeWriteIndex]);
             _fildes[kPipeReadIndex] = -1;
             _fildes[kPipeWriteIndex] = -1;
             return false;
@@ -105,6 +113,8 @@ namespace ix
                << " : " << strerror(errno);
             errorMsg = ss.str();
 
+            ::close(_fildes[kPipeReadIndex]);
+            ::close(_fildes[kPipeWriteIndex]);
             _fildes[kPipeReadIndex] = -1;
             _fildes[kPipeWriteIndex] = -1;
             return false;
@@ -121,7 +131,7 @@ namespace ix
         int fd = _fildes[kPipeWriteIndex];
         if (fd == -1) return false;
 
-        ssize_t ret = -1;
+        std::ptrdiff_t ret = -1;
         do
         {
             ret = ::write(fd, &value, sizeof(value));
@@ -131,8 +141,7 @@ namespace ix
         return ret == 8;
     }
 
-    // TODO: return max uint64_t for errors ?
-    uint64_t SelectInterruptPipe::read()
+    std::optional<uint64_t> SelectInterruptPipe::read()
     {
         std::lock_guard<std::mutex> lock(_fildesMutex);
 
@@ -140,12 +149,13 @@ namespace ix
 
         uint64_t value = 0;
 
-        ssize_t ret = -1;
+        std::ptrdiff_t ret = -1;
         do
         {
             ret = ::read(fd, &value, sizeof(value));
         } while (ret == -1 && errno == EINTR);
 
+        if (ret != sizeof(value)) return std::nullopt;
         return value;
     }
 

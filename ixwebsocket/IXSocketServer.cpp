@@ -13,7 +13,6 @@
 #include "IXSocket.h"
 #include "IXSocketConnect.h"
 #include "IXSocketFactory.h"
-#include <assert.h>
 #include <optional>
 #include <sstream>
 #include <stdio.h>
@@ -59,6 +58,11 @@ namespace ix
         fprintf(stdout, "%s\n", str.c_str());
     }
 
+    void SocketServer::setOnAcceptErrorCallback(const OnAcceptErrorCallback& callback)
+    {
+        _onAcceptErrorCallback = callback;
+    }
+
     std::optional<std::string> SocketServer::listen()
     {
         std::string acceptSelectInterruptInitErrorMsg;
@@ -97,8 +101,7 @@ namespace ix
 
         if (_addressFamily == AF_INET)
         {
-            struct sockaddr_in server;
-            memset(&server, '\0', sizeof(server));
+            struct sockaddr_in server{};
             server.sin_family = _addressFamily;
             server.sin_port = htons(_port);
 
@@ -125,8 +128,7 @@ namespace ix
         }
         else // AF_INET6
         {
-            struct sockaddr_in6 server;
-            memset(&server, '\0', sizeof(server));
+            struct sockaddr_in6 server{};
             server.sin6_family = _addressFamily;
             server.sin6_port = htons(_port);
 
@@ -264,7 +266,7 @@ namespace ix
     void SocketServer::run()
     {
         // Set the socket to non blocking mode, so that accept calls are not blocking
-        SocketConnect::configure(_serverFd);
+        SocketConnect::configureSocket(_serverFd);
 
         // Use a cryptic name to stay within the 16 bytes limit thread name limitation
         // $ echo Srv:gc:64000 | wc -c
@@ -300,21 +302,24 @@ namespace ix
             }
 
             // Accept a connection.
-            struct sockaddr_storage client;
+            struct sockaddr_storage client{};
             int clientFd;
             socklen_t addressLen = sizeof(client);
-            memset(&client, 0, sizeof(client));
 
             if ((clientFd = accept(_serverFd, (struct sockaddr*) &client, &addressLen)) < 0)
             {
                 if (!Socket::isWaitNeeded())
                 {
-                    // FIXME: that error should be propagated
                     int err = Socket::getErrno();
                     std::stringstream ss;
                     ss << "SocketServer::run() error accepting connection: " << err << ", "
                        << strerror(err);
-                    logError(ss.str());
+                    std::string errMsg = ss.str();
+                    logError(errMsg);
+                    if (_onAcceptErrorCallback)
+                    {
+                        _onAcceptErrorCallback(errMsg);
+                    }
                 }
                 continue;
             }
@@ -401,7 +406,7 @@ namespace ix
             }
 
             // Set the socket to non blocking mode + other tweaks
-            SocketConnect::configure(clientFd);
+            SocketConnect::configureSocket(clientFd);
 
             if (!socket->accept(errorMsg))
             {

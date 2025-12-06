@@ -11,6 +11,7 @@
 //
 
 #include "IXCancellationRequest.h"
+#include "IXIoResult.h"
 #include "IXProgressCallback.h"
 #include "IXProxyConfig.h"
 #include "IXSocketTLSOptions.h"
@@ -170,6 +171,8 @@ namespace ix
         // This could be a mix of control messages (Close, Ping, etc...) and
         // data messages. That buffer is resized
         std::vector<uint8_t> _rxbuf;
+        size_t _rxbufOffset = 0;  // Offset of unconsumed data
+        void compactRxBuf();  // Compact buffer when offset exceeds threshold
 
         // If set to a positive value, only read bytes from the socket until
         // _rxbuf has reached this size to avoid unnecessary erase churn.
@@ -177,13 +180,16 @@ namespace ix
 
         // Contains all messages that are waiting to be sent
         std::vector<uint8_t> _txbuf;
+        size_t _txbufOffset = 0;  // Offset of unconsumed data
         mutable std::mutex _txbufMutex;
+        void compactTxBuf();  // Compact buffer when offset exceeds threshold
 
         // Hold fragments for multi-fragments messages in a list. We support receiving very large
         // messages (tested messages up to 700M) and we cannot put them in a single
         // buffer that is resized, as this operation can be slow when a buffer has its
         // size increased 2 fold, while appending to a list has a fixed cost.
         std::list<std::string> _chunks;
+        size_t _chunksSize = 0;
 
         // Record the message kind (will be TEXT or BINARY) for a fragmented
         // message, present in the first chunk, since the final chunk will be a
@@ -245,9 +251,7 @@ namespace ix
         int _closeTimeoutMs;
         std::atomic<bool> _pongReceived;
         std::chrono::time_point<std::chrono::steady_clock> _lastPongTimePoint;
-        mutable std::mutex _lastPongTimePointMutex;
         std::chrono::time_point<std::chrono::steady_clock> _lastActivityTimePoint;
-        mutable std::mutex _lastActivityTimePointMutex;
 
         static const int kDefaultPingIntervalSecs;
 
@@ -257,7 +261,7 @@ namespace ix
         std::atomic<uint64_t> _pingCount;
 
         // We record when ping are being sent so that we can know when to send the next one
-        mutable std::mutex _lastSendPingTimePointMutex;
+        mutable std::mutex _timePointsMutex;  // protects all time points
         std::chrono::time_point<std::chrono::steady_clock> _lastSendPingTimePoint;
 
         // If this function returns true, it is time to send a new ping

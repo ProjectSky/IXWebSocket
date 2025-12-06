@@ -167,7 +167,7 @@ namespace ix
             int handleIndex = n - WSA_WAIT_EVENT_0;
             int socketIndex = handleIndex - 1;
 
-            WSANETWORKEVENTS netEvents;
+            WSANETWORKEVENTS netEvents{};
             int count = 0;
             // WSAWaitForMultipleEvents returns the index of the first signaled event. And to emulate WSAPoll()
             // all the signaled events must be processed.
@@ -175,7 +175,7 @@ namespace ix
             {
                 struct pollfd* fd = socketEvents[socketIndex];
 
-                memset(&netEvents, 0, sizeof(netEvents));
+                netEvents = {};
                 if (WSAEnumNetworkEvents(fd->fd, socketEvents[socketIndex], &netEvents) != 0)
                 {
                     fd->revents = POLLERR;
@@ -348,7 +348,8 @@ namespace ix
                 }
                 if (strlen(buf) < (size_t)l)
                 {
-                    strcpy(s, buf);
+                    strncpy(s, buf, l);
+                    s[l - 1] = '\0';
                     return s;
                 }
                 break;

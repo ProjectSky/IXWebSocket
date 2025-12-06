@@ -30,6 +30,7 @@ namespace ix
     {
     public:
         using ConnectionStateFactory = std::function<std::shared_ptr<ConnectionState>()>;
+        using OnAcceptErrorCallback = std::function<void(const std::string&)>;
 
         // Each connection is handled by its own worker thread.
         // We use a list as we only care about remove and append operations.
@@ -66,6 +67,8 @@ namespace ix
         int getBacklog();
         std::size_t getMaxConnections();
         int getAddressFamily();
+
+        void setOnAcceptErrorCallback(const OnAcceptErrorCallback& callback);
     protected:
         // Logging
         void logError(const std::string& str);
@@ -128,5 +131,7 @@ namespace ix
         std::condition_variable _conditionVariableGC;
         std::mutex _conditionVariableMutexGC;
         bool _canContinueGC{ false };
+
+        OnAcceptErrorCallback _onAcceptErrorCallback;
     };
 } // namespace ix

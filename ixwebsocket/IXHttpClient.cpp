@@ -7,6 +7,7 @@
 #include "IXHttpClient.h"
 
 #include "IXBase64.h"
+#include "IXStrCaseCompare.h"
 #include "IXGzipCodec.h"
 #include "IXHttpConnectionPool.h"
 #include "IXSocketFactory.h"
@@ -167,7 +168,7 @@ namespace ix
         std::string errorMsg;
 
         // Check if we can reuse the existing connection
-        bool canReuse = _keepAlive &&
+        bool canReuse = _keepAlive.load() &&
                         _socket &&
                         _socket->isOpen() &&
                         isConnectionReusable(host, port, tls);
@@ -175,7 +176,7 @@ namespace ix
         if (!canReuse)
         {
             _socket.reset();
-            if (_useConnectionPool)
+            if (_useConnectionPool.load())
             {
                 _socket = HttpConnectionPool::getInstance().acquire(host, port, tls, _tlsOptions, errorMsg);
             }
@@ -218,9 +219,9 @@ namespace ix
 #endif
 
         // Append extra headers
-        for (auto&& it : args->extraHeaders)
+        for (const auto& [name, value] : args->extraHeaders)
         {
-            ss << it.first << ": " << it.second << "\r\n";
+            ss << name << ": " << value << "\r\n";
         }
 
         // Set a default Accept header if none is present
@@ -246,6 +247,20 @@ namespace ix
         if (args->extraHeaders.find("Connection") == args->extraHeaders.end())
         {
             ss << "Connection: " << (_keepAlive ? "keep-alive" : "close") << "\r\n";
+        }
+
+        // Set Authorization header if auth is configured
+        if (args->extraHeaders.find("Authorization") == args->extraHeaders.end())
+        {
+            if (args->authType == HttpAuthType::Basic && !args->authUsername.empty())
+            {
+                std::string credentials = args->authUsername + ":" + args->authPassword;
+                ss << "Authorization: Basic " << macaron::Base64::Encode(credentials) << "\r\n";
+            }
+            else if (args->authType == HttpAuthType::Bearer && !args->authToken.empty())
+            {
+                ss << "Authorization: Bearer " << args->authToken << "\r\n";
+            }
         }
 
         if (verb == kPost || verb == kPut || verb == kPatch || _forceBody)
@@ -434,7 +449,21 @@ namespace ix
 
             // Recurse
             std::string location = headers["Location"];
-            return request(location, verb, body, args, redirects + 1);
+
+            // HTTP spec: 301/302/303 should convert POST/PUT/PATCH to GET
+            // 307/308 preserve the original method
+            std::string redirectVerb = verb;
+            std::string redirectBody = body;
+            if (code == 301 || code == 302 || code == 303)
+            {
+                if (verb != kGet && verb != kHead)
+                {
+                    redirectVerb = kGet;
+                    redirectBody.clear();
+                }
+            }
+
+            return request(location, redirectVerb, redirectBody, args, redirects + 1);
         }
 
         if (verb == "HEAD")
@@ -450,11 +479,12 @@ namespace ix
         }
 
         // Parse response:
-        if (headers.find("Content-Length") != headers.end())
+        auto contentLengthIt = headers.find("Content-Length");
+        if (contentLengthIt != headers.end())
         {
-            ssize_t contentLength = -1;
+            int64_t contentLength = -1;
             ss.str("");
-            ss << headers["Content-Length"];
+            ss << contentLengthIt->second;
             ss >> contentLength;
 
             auto chunkResult = _socket->readBytes(contentLength,
@@ -481,8 +511,9 @@ namespace ix
                 payload += *chunkResult;
             }
         }
-        else if (headers.find("Transfer-Encoding") != headers.end() &&
-                 headers["Transfer-Encoding"] == "chunked")
+        auto transferEncodingIt = headers.find("Transfer-Encoding");
+        if (transferEncodingIt != headers.end() &&
+            transferEncodingIt->second == "chunked")
         {
             std::stringstream ss;
 
@@ -559,9 +590,9 @@ namespace ix
                 if (chunkSize == 0) break;
             }
         }
-        else if (code == 204)
+        else if (code == 204 || (code >= 100 && code < 200))
         {
-            ; // 204 is NoContent response code
+            ; // 204 No Content, 1xx informational - no body
         }
         else
         {
@@ -610,8 +641,9 @@ namespace ix
         }
 
         // Check if server wants to close the connection
-        bool serverClose = headers.find("Connection") != headers.end() &&
-            (headers["Connection"] == "close" || headers["Connection"] == "Close");
+        auto connectionIt = headers.find("Connection");
+        bool serverClose = connectionIt != headers.end() &&
+            caseInsensitiveEquals(connectionIt->second, "close");
 
         if (serverClose)
         {
@@ -755,9 +787,9 @@ namespace ix
         size_t count = httpParameters.size();
         size_t i = 0;
 
-        for (auto&& it : httpParameters)
+        for (const auto& [key, val] : httpParameters)
         {
-            ss << urlEncode(it.first) << "=" << urlEncode(it.second);
+            ss << urlEncode(key) << "=" << urlEncode(val);
 
             if (i++ < (count - 1))
             {
@@ -786,27 +818,27 @@ namespace ix
         //
         std::stringstream ss;
 
-        for (auto&& it : httpFormDataParameters)
+        for (const auto& [name, content] : httpFormDataParameters)
         {
             ss << "--" << multipartBoundary << "\r\n"
                << "Content-Disposition:"
-               << " form-data; name=\"" << it.first << "\";"
-               << " filename=\"" << it.first << "\""
+               << " form-data; name=\"" << name << "\";"
+               << " filename=\"" << name << "\""
                << "\r\n"
                << "Content-Type: application/octet-stream"
                << "\r\n"
                << "\r\n"
-               << it.second << "\r\n";
+               << content << "\r\n";
         }
 
-        for (auto&& it : httpParameters)
+        for (const auto& [name, val] : httpParameters)
         {
             ss << "--" << multipartBoundary << "\r\n"
                << "Content-Disposition:"
-               << " form-data; name=\"" << it.first << "\";"
+               << " form-data; name=\"" << name << "\";"
                << "\r\n"
                << "\r\n"
-               << it.second << "\r\n";
+               << val << "\r\n";
         }
 
         ss << "--" << multipartBoundary << "--\r\n";
@@ -826,9 +858,10 @@ namespace ix
     {
         std::string str("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
 
-        static std::random_device rd;
-        static std::mt19937 generator(rd());
+        static std::mutex generatorMutex;
+        std::lock_guard<std::mutex> lock(generatorMutex);
 
+        static std::mt19937 generator(std::random_device{}());
         std::shuffle(str.begin(), str.end(), generator);
 
         return str;
@@ -841,21 +874,21 @@ namespace ix
 
     void HttpClient::setKeepAlive(bool enabled)
     {
-        _keepAlive = enabled;
+        _keepAlive.store(enabled);
     }
 
     void HttpClient::setUseConnectionPool(bool enabled)
     {
-        _useConnectionPool = enabled;
+        _useConnectionPool.store(enabled);
     }
 
     bool HttpClient::isKeepAliveEnabled() const
     {
-        return _keepAlive;
+        return _keepAlive.load();
     }
 
     bool HttpClient::isUseConnectionPoolEnabled() const
     {
-        return _useConnectionPool;
+        return _useConnectionPool.load();
     }
 } // namespace ix

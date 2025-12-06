@@ -34,4 +34,16 @@ namespace ix
     {
         return CaseInsensitiveLess::cmp(s1, s2);
     }
+
+    bool caseInsensitiveEquals(const std::string& a, const std::string& b)
+    {
+        if (a.size() != b.size()) return false;
+        return std::equal(a.begin(), a.end(), b.begin(), [](unsigned char c1, unsigned char c2) {
+#if defined(_WIN32) && !defined(__GNUC__)
+            return std::tolower(c1, std::locale()) == std::tolower(c2, std::locale());
+#else
+            return std::tolower(c1) == std::tolower(c2);
+#endif
+        });
+    }
 } // namespace ix

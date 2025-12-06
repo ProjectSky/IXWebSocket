@@ -74,6 +74,13 @@ namespace ix
     using Logger = std::function<void(const std::string&)>;
     using OnResponseCallback = std::function<void(const HttpResponsePtr&)>;
 
+    enum class HttpAuthType
+    {
+        None,
+        Basic,
+        Bearer
+    };
+
     struct HttpRequestArgs
     {
         std::string url;
@@ -92,6 +99,25 @@ namespace ix
         OnProgressCallback onProgressCallback;
         OnChunkCallback onChunkCallback;
         std::atomic<bool> cancel;
+
+        // Authentication
+        HttpAuthType authType = HttpAuthType::None;
+        std::string authUsername;
+        std::string authPassword;  // For Basic auth
+        std::string authToken;     // For Bearer auth
+
+        void setBasicAuth(const std::string& username, const std::string& password)
+        {
+            authType = HttpAuthType::Basic;
+            authUsername = username;
+            authPassword = password;
+        }
+
+        void setBearerAuth(const std::string& token)
+        {
+            authType = HttpAuthType::Bearer;
+            authToken = token;
+        }
     };
 
     using HttpRequestArgsPtr = std::shared_ptr<HttpRequestArgs>;

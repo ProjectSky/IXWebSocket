@@ -12,7 +12,6 @@
 #include "IXProxyConnect.h"
 #include "IXSocketConnect.h"
 #include "IXUniquePtr.h"
-#include <cassert>
 #include <errno.h>
 #include <vector>
 #ifdef _WIN32
@@ -291,6 +290,8 @@ namespace ix
     bool SocketOpenSSL::checkHost(const std::string& host, const char* pattern)
     {
 #if OPENSSL_VERSION_NUMBER >= 0x10100000L
+        (void) host;
+        (void) pattern;
         return true;
 #else
 
@@ -818,61 +819,54 @@ namespace ix
         Socket::close();
     }
 
-    ssize_t SocketOpenSSL::send(char* buf, size_t nbyte)
+    IoResult SocketOpenSSL::send(const char* buf, size_t nbyte)
     {
         std::lock_guard<std::mutex> lock(_mutex);
 
         if (_ssl_connection == nullptr || _ssl_context == nullptr)
         {
-            return 0;
+            return {0, IoError::ConnectionClosed};
         }
 
         ERR_clear_error();
-        ssize_t write_result = SSL_write(_ssl_connection, buf, (int) nbyte);
-        int reason = SSL_get_error(_ssl_connection, (int) write_result);
+        int write_result = SSL_write(_ssl_connection, buf, (int) nbyte);
+        int reason = SSL_get_error(_ssl_connection, write_result);
 
         if (reason == SSL_ERROR_NONE)
         {
-            return write_result;
+            return {static_cast<size_t>(write_result), IoError::Success};
         }
-        else if (reason == SSL_ERROR_WANT_READ || reason == SSL_ERROR_WANT_WRITE)
+        if (reason == SSL_ERROR_WANT_READ || reason == SSL_ERROR_WANT_WRITE)
         {
-            errno = EWOULDBLOCK;
-            return -1;
+            return {0, IoError::WouldBlock};
         }
-        else
-        {
-            return -1;
-        }
+        return {0, IoError::Error};
     }
 
-    ssize_t SocketOpenSSL::recv(void* buf, size_t nbyte)
+    IoResult SocketOpenSSL::recv(void* buf, size_t nbyte)
     {
-        while (true)
+        std::lock_guard<std::mutex> lock(_mutex);
+
+        if (_ssl_connection == nullptr || _ssl_context == nullptr)
         {
-            std::lock_guard<std::mutex> lock(_mutex);
-
-            if (_ssl_connection == nullptr || _ssl_context == nullptr)
-            {
-                return 0;
-            }
-
-            ERR_clear_error();
-            ssize_t read_result = SSL_read(_ssl_connection, buf, (int) nbyte);
-
-            if (read_result > 0)
-            {
-                return read_result;
-            }
-
-            int reason = SSL_get_error(_ssl_connection, (int) read_result);
-
-            if (reason == SSL_ERROR_WANT_READ || reason == SSL_ERROR_WANT_WRITE)
-            {
-                errno = EWOULDBLOCK;
-            }
-            return -1;
+            return {0, IoError::ConnectionClosed};
         }
+
+        ERR_clear_error();
+        int read_result = SSL_read(_ssl_connection, buf, (int) nbyte);
+
+        if (read_result > 0)
+        {
+            return {static_cast<size_t>(read_result), IoError::Success};
+        }
+
+        int reason = SSL_get_error(_ssl_connection, read_result);
+
+        if (reason == SSL_ERROR_WANT_READ || reason == SSL_ERROR_WANT_WRITE)
+        {
+            return {0, IoError::WouldBlock};
+        }
+        return {0, IoError::Error};
     }
 
 } // namespace ix

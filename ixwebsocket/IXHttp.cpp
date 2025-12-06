@@ -123,11 +123,12 @@ namespace ix
         auto headers = std::move(*headersOpt);
 
         std::string body;
-        if (headers.find("Content-Length") != headers.end())
+        auto contentLengthIt = headers.find("Content-Length");
+        if (contentLengthIt != headers.end())
         {
             int contentLength = 0;
             {
-                const char* p = headers["Content-Length"].c_str();
+                const char* p = contentLengthIt->second.c_str();
                 char* p_end {};
                 errno = 0;
                 long val = std::strtol(p, &p_end, 10);
@@ -202,8 +203,9 @@ namespace ix
         }
 
         // Check if chunked encoding should be used
-        bool useChunked = response->headers.find("Transfer-Encoding") != response->headers.end() &&
-                          response->headers.at("Transfer-Encoding") == "chunked";
+        auto transferEncodingIt = response->headers.find("Transfer-Encoding");
+        bool useChunked = transferEncodingIt != response->headers.end() &&
+                          transferEncodingIt->second == "chunked";
 
         // Write headers
         ss.str("");
@@ -211,9 +213,9 @@ namespace ix
         {
             ss << "Content-Length: " << response->body.size() << "\r\n";
         }
-        for (auto&& it : response->headers)
+        for (const auto& [name, value] : response->headers)
         {
-            ss << it.first << ": " << it.second << "\r\n";
+            ss << name << ": " << value << "\r\n";
         }
         ss << "\r\n";
 

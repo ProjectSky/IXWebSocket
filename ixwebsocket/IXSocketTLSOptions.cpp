@@ -6,7 +6,6 @@
 
 #include "IXSocketTLSOptions.h"
 
-#include <assert.h>
 #include <fstream>
 #include <sstream>
 

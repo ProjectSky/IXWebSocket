@@ -58,19 +58,19 @@ namespace ix
 
         // send extra headers in client handshake request
         void setExtraHeaders(const WebSocketHttpHeaders& headers);
-        const WebSocketHttpHeaders& getExtraHeaders() const;
+        const WebSocketHttpHeaders getExtraHeaders() const;
         void setPerMessageDeflateOptions(
             const WebSocketPerMessageDeflateOptions& perMessageDeflateOptions);
         void setTLSOptions(const SocketTLSOptions& socketTLSOptions);
-        const SocketTLSOptions& getTLSOptions() const;
+        const SocketTLSOptions getTLSOptions() const;
         void setProxyConfig(const ProxyConfig& proxyConfig);
-        const ProxyConfig& getProxyConfig() const;
+        const ProxyConfig getProxyConfig() const;
         void setPingMessage(const std::string& sendMessage,
                             SendMessageKind pingType = SendMessageKind::Ping);
         void setPingInterval(int pingIntervalSecs);
         void setPong(bool enabled);
         void setTimeouts(const WebSocketTimeouts& timeouts);
-        const WebSocketTimeouts& getTimeouts() const;
+        const WebSocketTimeouts getTimeouts() const;
         void setPerMessageDeflate(bool enabled);
         void addSubProtocol(const std::string& subProtocol);
         void setHandshakeTimeout(int handshakeTimeoutSecs);
@@ -141,7 +141,7 @@ namespace ix
         void setMinWaitBetweenReconnectionRetries(uint32_t minWaitBetweenReconnectionRetries);
         uint32_t getMaxWaitBetweenReconnectionRetries() const;
         uint32_t getMinWaitBetweenReconnectionRetries() const;
-        const std::vector<std::string>& getSubProtocols();
+        std::vector<std::string> getSubProtocols() const;
         void clearSubProtocols();
         void removeSubProtocol(const std::string& subProtocol);
 
@@ -182,8 +182,9 @@ namespace ix
 
         // Backpressure
         OnBackpressureCallback _onBackpressureCallback;
-        size_t _backpressureThreshold;
-        bool _backpressureActive;
+        std::atomic<size_t> _backpressureThreshold;
+        std::atomic<bool> _backpressureActive;
+        mutable std::mutex _backpressureMutex; // protects _onBackpressureCallback
 
         // Statistics
         WebSocketStats _stats;
@@ -210,12 +211,12 @@ namespace ix
         static const int kDefaultHandShakeTimeoutSecs;
 
         // enable or disable PONG frame response to received PING frame
-        bool _enablePong;
+        std::atomic<bool> _enablePong;
         static const bool kDefaultEnablePong;
 
         // Optional ping and pong timeout
-        int _pingIntervalSecs;
-        int _pingTimeoutSecs;
+        std::atomic<int> _pingIntervalSecs;
+        std::atomic<int> _pingTimeoutSecs;
         std::string _pingMessage;
         SendMessageKind _pingType;
         static const int kDefaultPingIntervalSecs;

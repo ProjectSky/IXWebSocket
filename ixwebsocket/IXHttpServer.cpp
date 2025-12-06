@@ -10,6 +10,7 @@
 #include "IXNetSystem.h"
 #include "IXSocketConnect.h"
 #include "IXUserAgent.h"
+#include <charconv>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -193,9 +194,9 @@ namespace ix
                         {
                             size_t start = 0, end = content.size() - 1;
                             if (dashPos > 0)
-                                start = std::stoull(rangeValue.substr(0, dashPos));
+                                std::from_chars(rangeValue.data(), rangeValue.data() + dashPos, start);
                             if (dashPos + 1 < rangeValue.size())
-                                end = std::stoull(rangeValue.substr(dashPos + 1));
+                                std::from_chars(rangeValue.data() + dashPos + 1, rangeValue.data() + rangeValue.size(), end);
 
                             if (start < content.size() && start <= end)
                             {
@@ -293,10 +294,10 @@ namespace ix
                 logInfo(ss.str());
 
                 logInfo("== Headers == ");
-                for (auto&& it : request->headers)
+                for (const auto& [name, value] : request->headers)
                 {
                     std::ostringstream oss;
-                    oss << it.first << ": " << it.second;
+                    oss << name << ": " << value;
                     logInfo(oss.str());
                 }
                 logInfo("");

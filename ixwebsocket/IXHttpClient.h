@@ -126,13 +126,13 @@ namespace ix
         bool _forceBody;
 
         // Keep-Alive support
-        bool _keepAlive = true;
+        std::atomic<bool> _keepAlive{true};
         std::string _lastHost;
         int _lastPort = 0;
         bool _lastTls = false;
 
         bool isConnectionReusable(const std::string& host, int port, bool tls) const;
-        bool _useConnectionPool = false;
+        std::atomic<bool> _useConnectionPool{false};
 
     public:
         void setKeepAlive(bool enabled);

@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace ix
@@ -22,7 +23,7 @@ namespace ix
 
         virtual bool notify(uint64_t value);
         virtual bool clear();
-        virtual uint64_t read();
+        virtual std::optional<uint64_t> read();
         virtual int getFd() const;
         virtual void* getEvent() const;
 

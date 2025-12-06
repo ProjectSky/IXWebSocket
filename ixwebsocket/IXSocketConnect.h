@@ -21,7 +21,7 @@ namespace ix
                            std::string& errMsg,
                            const CancellationRequest& isCancellationRequested);
 
-        static void configure(int sockfd);
+        static void configureSocket(int sockfd);
 
     private:
         static int connectToAddress(const struct addrinfo* address,

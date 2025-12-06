@@ -59,8 +59,7 @@ namespace ix
                                             int port,
                                             std::string& errMsg)
     {
-        struct addrinfo hints;
-        memset(&hints, 0, sizeof(hints));
+        struct addrinfo hints{};
         hints.ai_flags = AI_ADDRCONFIG | AI_NUMERICSERV;
         hints.ai_family = AF_UNSPEC;
         hints.ai_socktype = SOCK_STREAM;
@@ -181,7 +180,7 @@ namespace ix
         _errMsg = errMsg;
     }
 
-    const std::string& DNSLookup::getErrMsg()
+    std::string DNSLookup::getErrMsg()
     {
         std::lock_guard<std::mutex> lock(_errMsgMutex);
         return _errMsg;

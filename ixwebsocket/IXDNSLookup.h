@@ -46,7 +46,7 @@ namespace ix
         void run(std::weak_ptr<DNSLookup> self, std::string hostname, int port); // thread runner
 
         void setErrMsg(const std::string& errMsg);
-        const std::string& getErrMsg();
+        std::string getErrMsg();
 
         void setRes(AddrInfoPtr addr);
         AddrInfoPtr getRes();

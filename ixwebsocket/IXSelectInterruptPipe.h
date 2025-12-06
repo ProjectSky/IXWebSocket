@@ -9,7 +9,7 @@
 #include "IXSelectInterrupt.h"
 #include <cstdint>
 #include <mutex>
-#include <stdint.h>
+#include <optional>
 #include <string>
 
 namespace ix
@@ -24,7 +24,7 @@ namespace ix
 
         bool notify(uint64_t value) final;
         bool clear() final;
-        uint64_t read() final;
+        std::optional<uint64_t> read() final;
         int getFd() const final;
 
     private:

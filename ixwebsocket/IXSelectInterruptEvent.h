@@ -6,9 +6,10 @@
 
 #include "IXSelectInterrupt.h"
 #include <cstdint>
-#include <mutex>
-#include <string>
 #include <deque>
+#include <mutex>
+#include <optional>
+#include <string>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -25,10 +26,10 @@ namespace ix
 
         bool notify(uint64_t value) final;
         bool clear() final;
-        uint64_t read() final;
+        std::optional<uint64_t> read() final;
         void* getEvent() const final;
     private:
-        // contains every value only once, new values are inserted at the begin, nu
+        // Contains every value only once, duplicates are ignored
         std::deque<uint64_t> _values;
         std::mutex _valuesMutex;
 #ifdef _WIN32

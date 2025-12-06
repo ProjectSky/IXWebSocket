@@ -1,7 +1,7 @@
 /*
  *  IXHttpConnectionPool.h
  *  Author: ProjectSky
- *  Copyright (c) 2019 Machine Zone, Inc. All rights reserved.
+ *  Copyright (c) 2025 SkyServers. All rights reserved.
  */
 
 #pragma once

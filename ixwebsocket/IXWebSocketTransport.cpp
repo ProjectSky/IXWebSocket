@@ -42,8 +42,8 @@
 #include "IXWebSocketHandshake.h"
 #include "IXWebSocketHttpHeaders.h"
 #include <chrono>
-#include <cstdarg>
 #include <cstdlib>
+#include <random>
 #include <sstream>
 #include <string.h>
 #include <string>
@@ -260,19 +260,11 @@ namespace ix
 
     void WebSocketTransport::initTimePointsAfterConnect()
     {
+        std::lock_guard<std::mutex> lock(_timePointsMutex);
         auto now = std::chrono::steady_clock::now();
-        {
-            std::lock_guard<std::mutex> lock(_lastSendPingTimePointMutex);
-            _lastSendPingTimePoint = now;
-        }
-        {
-            std::lock_guard<std::mutex> lock(_lastPongTimePointMutex);
-            _lastPongTimePoint = now;
-        }
-        {
-            std::lock_guard<std::mutex> lock(_lastActivityTimePointMutex);
-            _lastActivityTimePoint = now;
-        }
+        _lastSendPingTimePoint = now;
+        _lastPongTimePoint = now;
+        _lastActivityTimePoint = now;
     }
 
     // Only consider send PING time points for that computation.
@@ -280,7 +272,7 @@ namespace ix
     {
         if (_pingIntervalSecs <= 0) return false;
 
-        std::lock_guard<std::mutex> lock(_lastSendPingTimePointMutex);
+        std::lock_guard<std::mutex> lock(_timePointsMutex);
         auto now = std::chrono::steady_clock::now();
         return now - _lastSendPingTimePoint > std::chrono::seconds(_pingIntervalSecs);
     }
@@ -295,40 +287,37 @@ namespace ix
     WebSocketSendInfo WebSocketTransport::sendHeartBeat(SendMessageKind pingMessage)
     {
         _pongReceived = false;
-        std::stringstream ss;
-
-        ss << _kPingMessage;
+        std::string msg = _kPingMessage;
         if (!_setCustomMessage)
         {
-            ss << "::" << _pingIntervalSecs << "s"
-               << "::" << _pingCount++;
+            msg += "::" + std::to_string(_pingIntervalSecs) + "s::" + std::to_string(_pingCount++);
         }
         if (pingMessage == SendMessageKind::Ping)
         {
-            return sendPing(ss.str());
+            return sendPing(msg);
         }
         else if (pingMessage == SendMessageKind::Binary)
         {
-            WebSocketSendInfo info = sendBinary(ss.str(), nullptr);
+            WebSocketSendInfo info = sendBinary(msg, nullptr);
             if (info.success)
             {
-                std::lock_guard<std::mutex> lck(_lastSendPingTimePointMutex);
+                std::lock_guard<std::mutex> lock(_timePointsMutex);
                 _lastSendPingTimePoint = std::chrono::steady_clock::now();
             }
             return info;
         }
         else if (pingMessage == SendMessageKind::Text)
         {
-            WebSocketSendInfo info = sendText(ss.str(), nullptr);
+            WebSocketSendInfo info = sendText(msg, nullptr);
             if (info.success)
             {
-                std::lock_guard<std::mutex> lck(_lastSendPingTimePointMutex);
+                std::lock_guard<std::mutex> lock(_timePointsMutex);
                 _lastSendPingTimePoint = std::chrono::steady_clock::now();
             }
             return info;
         }
 
-        // unknow type ping message
+        // unknown type ping message
         return {};
     }
 
@@ -343,30 +332,31 @@ namespace ix
     {
         if (_readyState == ReadyState::OPEN)
         {
-            // Check idle timeout
-            if (_idleTimeoutSecs > 0)
+            // Check idle timeout and ping timeout
             {
-                std::lock_guard<std::mutex> lock(_lastActivityTimePointMutex);
+                std::lock_guard<std::mutex> lock(_timePointsMutex);
                 auto now = std::chrono::steady_clock::now();
-                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                    now - _lastActivityTimePoint).count();
-                if (elapsed >= _idleTimeoutSecs)
-                {
-                    close(WebSocketCloseConstants::kInternalErrorCode, "Idle timeout");
-                }
-            }
 
-            // Check ping timeout (independent of ping interval)
-            if (_pingTimeoutSecs > 0 && _pingType == SendMessageKind::Ping && !_pongReceived)
-            {
-                std::lock_guard<std::mutex> lock(_lastPongTimePointMutex);
-                auto now = std::chrono::steady_clock::now();
-                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                    now - _lastPongTimePoint).count();
-                if (elapsed >= _pingTimeoutSecs)
+                if (_idleTimeoutSecs > 0)
                 {
-                    close(WebSocketCloseConstants::kInternalErrorCode,
-                          WebSocketCloseConstants::kPingTimeoutMessage);
+                    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                        now - _lastActivityTimePoint).count();
+                    if (elapsed >= _idleTimeoutSecs)
+                    {
+                        close(WebSocketCloseConstants::kInternalErrorCode, "Idle timeout");
+                    }
+                }
+
+                // Check ping timeout (independent of ping interval)
+                if (_pingTimeoutSecs > 0 && _pingType == SendMessageKind::Ping && !_pongReceived)
+                {
+                    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                        now - _lastPongTimePoint).count();
+                    if (elapsed >= _pingTimeoutSecs)
+                    {
+                        close(WebSocketCloseConstants::kInternalErrorCode,
+                              WebSocketCloseConstants::kPingTimeoutMessage);
+                    }
                 }
             }
 
@@ -394,6 +384,7 @@ namespace ix
         if (_pingIntervalSecs > 0)
         {
             // compute lasting delay to wait for next ping / timeout, if at least one set
+            std::lock_guard<std::mutex> lock(_timePointsMutex);
             auto now = std::chrono::steady_clock::now();
             int timeSinceLastPingMs = (int) std::chrono::duration_cast<std::chrono::milliseconds>(
                                           now - _lastSendPingTimePoint)
@@ -447,6 +438,7 @@ namespace ix
         if (_readyState == ReadyState::CLOSING && closingDelayExceeded())
         {
             _rxbuf.clear();
+            _rxbufOffset = 0;
             // close code and reason were set when calling close()
             closeSocket();
             setReadyState(ReadyState::CLOSED);
@@ -458,7 +450,27 @@ namespace ix
     bool WebSocketTransport::isSendBufferEmpty() const
     {
         std::lock_guard<std::mutex> lock(_txbufMutex);
-        return _txbuf.empty();
+        return _txbufOffset >= _txbuf.size();
+    }
+
+    void WebSocketTransport::compactTxBuf()
+    {
+        // Compact when offset exceeds half of buffer size
+        if (_txbufOffset > _txbuf.size() / 2 && _txbufOffset > 0)
+        {
+            _txbuf.erase(_txbuf.begin(), _txbuf.begin() + _txbufOffset);
+            _txbufOffset = 0;
+        }
+    }
+
+    void WebSocketTransport::compactRxBuf()
+    {
+        // Compact when offset exceeds half of buffer size
+        if (_rxbufOffset > _rxbuf.size() / 2 && _rxbufOffset > 0)
+        {
+            _rxbuf.erase(_rxbuf.begin(), _rxbuf.begin() + _rxbufOffset);
+            _rxbufOffset = 0;
+        }
     }
 
     template<class Iterator>
@@ -501,7 +513,7 @@ namespace ix
     {
         if (ws.mask)
         {
-            uint8_t* data = _rxbuf.data() + ws.header_size;
+            uint8_t* data = _rxbuf.data() + _rxbufOffset + ws.header_size;
             size_t j = 0;
             for (; j + 4 <= ws.N; j += 4)
             {
@@ -545,8 +557,9 @@ namespace ix
         while (true)
         {
             wsheader_type ws;
-            if (_rxbuf.size() < 2) break;                /* Need at least 2 */
-            const uint8_t* data = (uint8_t*) &_rxbuf[0]; // peek, but don't consume
+            size_t avail = _rxbuf.size() - _rxbufOffset;  // Available bytes
+            if (avail < 2) break;                /* Need at least 2 */
+            const uint8_t* data = (uint8_t*) &_rxbuf[_rxbufOffset]; // peek, but don't consume
             ws.fin = (data[0] & 0x80) == 0x80;
             ws.rsv1 = (data[0] & 0x40) == 0x40;
             ws.rsv2 = (data[0] & 0x20) == 0x20;
@@ -556,13 +569,13 @@ namespace ix
             ws.N0 = (data[1] & 0x7f);
             ws.header_size =
                 2 + (ws.N0 == 126 ? 2 : 0) + (ws.N0 == 127 ? 8 : 0) + (ws.mask ? 4 : 0);
-            if (_rxbuf.size() < ws.header_size) break; /* Need: ws.header_size - _rxbuf.size() */
+            if (avail < ws.header_size) break; /* Need: ws.header_size - avail */
 
             if ((ws.rsv1 && !_enablePerMessageDeflate) || ws.rsv2 || ws.rsv3)
             {
                 close(WebSocketCloseConstants::kProtocolErrorCode,
                       WebSocketCloseConstants::kProtocolErrorReservedBitUsed,
-                      _rxbuf.size());
+                      avail);
                 return;
             }
 
@@ -601,6 +614,9 @@ namespace ix
             else
             {
                 // invalid payload length according to the spec. bail out
+                close(WebSocketCloseConstants::kProtocolErrorCode,
+                      WebSocketCloseConstants::kProtocolErrorMessage,
+                      avail);
                 return;
             }
 
@@ -626,10 +642,10 @@ namespace ix
                 return;
             }
 
-            if (_rxbuf.size() < ws.header_size + ws.N)
+            if (avail < ws.header_size + ws.N)
             {
                 _rxbufWanted = ws.header_size + ws.N;
-                return; /* Need: ws.header_size+ws.N - _rxbuf.size() */
+                return; /* Need: ws.header_size+ws.N - avail */
             }
 
             _rxbufWanted = 0;
@@ -646,8 +662,8 @@ namespace ix
             unmaskReceiveBuffer(ws);
             std::string frameData;
             frameData.reserve((size_t) ws.N);
-            frameData.assign(_rxbuf.begin() + ws.header_size,
-                             _rxbuf.begin() + ws.header_size + (size_t) ws.N);
+            frameData.assign(_rxbuf.begin() + _rxbufOffset + ws.header_size,
+                             _rxbuf.begin() + _rxbufOffset + ws.header_size + (size_t) ws.N);
 
             // We got a whole message, now do something with it:
             if (ws.opcode == wsheader_type::TEXT_FRAME ||
@@ -698,6 +714,7 @@ namespace ix
                     // the internal buffer which is slow and can let the internal OS
                     // receive buffer fill out.
                     //
+                    _chunksSize += frameData.size();
                     _chunks.emplace_back(frameData);
 
                     if (ws.fin)
@@ -708,6 +725,7 @@ namespace ix
                                     onMessageCallback);
 
                         _chunks.clear();
+                        _chunksSize = 0;
                         _receivedMessageCompressed = false;
                     }
                     else
@@ -740,7 +758,7 @@ namespace ix
             {
                 _pongReceived = true;
                 {
-                    std::lock_guard<std::mutex> lock(_lastPongTimePointMutex);
+                    std::lock_guard<std::mutex> lock(_timePointsMutex);
                     _lastPongTimePoint = std::chrono::steady_clock::now();
                 }
                 emitMessage(MessageKind::PONG, frameData, false, onMessageCallback);
@@ -753,8 +771,8 @@ namespace ix
                 if (ws.N >= 2)
                 {
                     // Extract the close code first, available as the first 2 bytes
-                    code |= ((uint64_t) _rxbuf[ws.header_size]) << 8;
-                    code |= ((uint64_t) _rxbuf[ws.header_size + 1]) << 0;
+                    code |= ((uint64_t) _rxbuf[_rxbufOffset + ws.header_size]) << 8;
+                    code |= ((uint64_t) _rxbuf[_rxbufOffset + ws.header_size + 1]) << 0;
 
                     // Get the reason.
                     if (ws.N > 2)
@@ -803,7 +821,7 @@ namespace ix
                     wakeUpFromPoll(SelectInterrupt::kCloseRequest);
 
                     bool remote = true;
-                    closeSocketAndSwitchToClosedState(code, reason, _rxbuf.size(), remote);
+                    closeSocketAndSwitchToClosedState(code, reason, avail, remote);
                 }
                 else
                 {
@@ -814,7 +832,7 @@ namespace ix
                     if (identicalReason)
                     {
                         bool remote = false;
-                        closeSocketAndSwitchToClosedState(code, reason, _rxbuf.size(), remote);
+                        closeSocketAndSwitchToClosedState(code, reason, avail, remote);
                     }
                 }
             }
@@ -823,18 +841,21 @@ namespace ix
                 // Unexpected frame type
                 close(WebSocketCloseConstants::kProtocolErrorCode,
                       WebSocketCloseConstants::kProtocolErrorMessage,
-                      _rxbuf.size());
+                      avail);
             }
 
-            // Erase the message that has been processed from the input/read buffer
-            _rxbuf.erase(_rxbuf.begin(), _rxbuf.begin() + ws.header_size + (size_t) ws.N);
+            // Advance offset past the processed message
+            _rxbufOffset += ws.header_size + (size_t) ws.N;
         }
+
+        compactRxBuf();
 
         // if an abnormal closure was raised in poll, and nothing else triggered a CLOSED state in
         // the received and processed data then close the connection
         if (pollResult != PollResult::Succeeded)
         {
             _rxbuf.clear();
+            _rxbufOffset = 0;
 
             // if we previously closed the connection (CLOSING state), then set state to CLOSED
             // (code/reason were set before)
@@ -856,20 +877,12 @@ namespace ix
 
     std::string WebSocketTransport::getMergedChunks() const
     {
-        size_t length = 0;
-        for (auto&& chunk : _chunks)
-        {
-            length += chunk.size();
-        }
-
         std::string msg;
-        msg.reserve(length);
-
-        for (auto&& chunk : _chunks)
+        msg.reserve(_chunksSize);
+        for (const auto& chunk : _chunks)
         {
             msg.append(chunk);
         }
-
         return msg;
     }
 
@@ -878,8 +891,10 @@ namespace ix
                                          bool compressedMessage,
                                          const OnMessageCallback& onMessageCallback)
     {
-        std::lock_guard<std::mutex> lock(_lastActivityTimePointMutex);
-        _lastActivityTimePoint = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> lock(_timePointsMutex);
+            _lastActivityTimePoint = std::chrono::steady_clock::now();
+        }
         size_t wireSize = message.size();
 
         // When the RSV1 bit is 1 it means the message is compressed
@@ -913,10 +928,8 @@ namespace ix
 
     unsigned WebSocketTransport::getRandomUnsigned()
     {
-        auto now = std::chrono::system_clock::now();
-        auto seconds =
-            std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
-        return static_cast<unsigned>(seconds);
+        static thread_local std::mt19937 gen(std::random_device{}());
+        return gen();
     }
 
     WebSocketSendInfo WebSocketTransport::sendData(wsheader_type::opcode_type type,
@@ -1050,74 +1063,73 @@ namespace ix
         masking_key[3] = (x) &0xff;
 
         // Max header size: 2 + 8 (extended length) + 4 (mask) = 14 bytes
-        uint8_t headerBuf[14];
+        uint8_t headerBuf[14] = {};
         size_t headerSize = 2 + (message_size >= 126 ? 2 : 0) + (message_size >= 65536 ? 6 : 0) +
                             (_useMask ? 4 : 0);
-        memset(headerBuf, 0, headerSize);
-        std::vector<uint8_t> header(headerBuf, headerBuf + headerSize);
-        header[0] = type;
+        headerBuf[0] = type;
 
         // The fin bit indicate that this is the last fragment. Fin is French for end.
         if (fin)
         {
-            header[0] |= 0x80;
+            headerBuf[0] |= 0x80;
         }
 
         // The rsv1 bit indicate that the frame is compressed
         // continuation opcodes should not set it. Autobahn 12.2.10 and others 12.X
         if (compress && type != wsheader_type::CONTINUATION)
         {
-            header[0] |= 0x40;
+            headerBuf[0] |= 0x40;
         }
 
         if (message_size < 126)
         {
-            header[1] = (message_size & 0xff) | (_useMask ? 0x80 : 0);
+            headerBuf[1] = (message_size & 0xff) | (_useMask ? 0x80 : 0);
 
             if (_useMask)
             {
-                header[2] = masking_key[0];
-                header[3] = masking_key[1];
-                header[4] = masking_key[2];
-                header[5] = masking_key[3];
+                headerBuf[2] = masking_key[0];
+                headerBuf[3] = masking_key[1];
+                headerBuf[4] = masking_key[2];
+                headerBuf[5] = masking_key[3];
             }
         }
         else if (message_size < 65536)
         {
-            header[1] = 126 | (_useMask ? 0x80 : 0);
-            header[2] = (message_size >> 8) & 0xff;
-            header[3] = (message_size >> 0) & 0xff;
+            headerBuf[1] = 126 | (_useMask ? 0x80 : 0);
+            headerBuf[2] = (message_size >> 8) & 0xff;
+            headerBuf[3] = (message_size >> 0) & 0xff;
 
             if (_useMask)
             {
-                header[4] = masking_key[0];
-                header[5] = masking_key[1];
-                header[6] = masking_key[2];
-                header[7] = masking_key[3];
+                headerBuf[4] = masking_key[0];
+                headerBuf[5] = masking_key[1];
+                headerBuf[6] = masking_key[2];
+                headerBuf[7] = masking_key[3];
             }
         }
         else
         { // TODO: run coverage testing here
-            header[1] = 127 | (_useMask ? 0x80 : 0);
-            header[2] = (message_size >> 56) & 0xff;
-            header[3] = (message_size >> 48) & 0xff;
-            header[4] = (message_size >> 40) & 0xff;
-            header[5] = (message_size >> 32) & 0xff;
-            header[6] = (message_size >> 24) & 0xff;
-            header[7] = (message_size >> 16) & 0xff;
-            header[8] = (message_size >> 8) & 0xff;
-            header[9] = (message_size >> 0) & 0xff;
+            headerBuf[1] = 127 | (_useMask ? 0x80 : 0);
+            headerBuf[2] = (message_size >> 56) & 0xff;
+            headerBuf[3] = (message_size >> 48) & 0xff;
+            headerBuf[4] = (message_size >> 40) & 0xff;
+            headerBuf[5] = (message_size >> 32) & 0xff;
+            headerBuf[6] = (message_size >> 24) & 0xff;
+            headerBuf[7] = (message_size >> 16) & 0xff;
+            headerBuf[8] = (message_size >> 8) & 0xff;
+            headerBuf[9] = (message_size >> 0) & 0xff;
 
             if (_useMask)
             {
-                header[10] = masking_key[0];
-                header[11] = masking_key[1];
-                header[12] = masking_key[2];
-                header[13] = masking_key[3];
+                headerBuf[10] = masking_key[0];
+                headerBuf[11] = masking_key[1];
+                headerBuf[12] = masking_key[2];
+                headerBuf[13] = masking_key[3];
             }
         }
 
         // _txbuf will keep growing until it can be transmitted over the socket:
+        std::vector<uint8_t> header(headerBuf, headerBuf + headerSize);
         appendToSendBuffer(header, message_begin, message_end, message_size, masking_key);
 
         // Now actually send this data
@@ -1131,7 +1143,7 @@ namespace ix
 
         if (info.success)
         {
-            std::lock_guard<std::mutex> lck(_lastSendPingTimePointMutex);
+            std::lock_guard<std::mutex> lock(_timePointsMutex);
             _lastSendPingTimePoint = std::chrono::steady_clock::now();
         }
 
@@ -1158,19 +1170,20 @@ namespace ix
     {
         std::lock_guard<std::mutex> lock(_txbufMutex);
 
-        while (_txbuf.size())
+        while (_txbufOffset < _txbuf.size())
         {
-            ssize_t ret = 0;
+            size_t remaining = _txbuf.size() - _txbufOffset;
+            IoResult result;
             {
                 std::lock_guard<std::mutex> lock(_socketMutex);
-                ret = _socket->send((char*) &_txbuf[0], _txbuf.size());
+                result = _socket->send((const char*)(_txbuf.data() + _txbufOffset), remaining);
             }
 
-            if (ret < 0 && Socket::isWaitNeeded())
+            if (result.wouldBlock())
             {
                 break;
             }
-            else if (ret <= 0)
+            else if (!result || result.closed())
             {
                 closeSocket();
                 if (_readyState != ReadyState::CLOSING)
@@ -1181,10 +1194,11 @@ namespace ix
             }
             else
             {
-                _txbuf.erase(_txbuf.begin(), _txbuf.begin() + ret);
+                _txbufOffset += result.bytes;
             }
         }
 
+        compactTxBuf();
         return true;
     }
 
@@ -1195,22 +1209,23 @@ namespace ix
             // If _rxbufWanted isn't set, don't attempt to read more than kChunkSize
             // into _rxbuf. If a client is sending frames faster than they can be
             // processed this would otherwise bloat _rxbuf and further introduce
-            // unnecessary processing overhead due to .erase() in dispatch().
+            // unnecessary processing overhead.
             //
             // Further, not reading everything from the socket will eventually
             // result in back pressure for the client.
-            if (_rxbufWanted == 0 && _rxbuf.size() >= kChunkSize) break;
+            size_t avail = _rxbuf.size() - _rxbufOffset;
+            if (_rxbufWanted == 0 && avail >= kChunkSize) break;
 
             // There's also no point in reading more bytes than needed.
-            if (_rxbufWanted > 0 && _rxbuf.size() >= _rxbufWanted) break;
+            if (_rxbufWanted > 0 && avail >= _rxbufWanted) break;
 
-            ssize_t ret = _socket->recv((char*) &_readbuf[0], _readbuf.size());
+            auto result = _socket->recv((char*) &_readbuf[0], _readbuf.size());
 
-            if (ret < 0 && Socket::isWaitNeeded())
+            if (result.wouldBlock())
             {
                 break;
             }
-            else if (ret <= 0)
+            else if (!result || result.closed())
             {
                 // if there are received data pending to be processed, then delay the abnormal
                 // closure to after dispatch (other close code/reason could be read from the
@@ -1221,7 +1236,7 @@ namespace ix
             }
             else
             {
-                _rxbuf.insert(_rxbuf.end(), _readbuf.begin(), _readbuf.begin() + ret);
+                _rxbuf.insert(_rxbuf.end(), _readbuf.begin(), _readbuf.begin() + result.bytes);
             }
         }
 
@@ -1254,13 +1269,13 @@ namespace ix
     void WebSocketTransport::closeSocket()
     {
         std::lock_guard<std::mutex> lock(_socketMutex);
-        _socket->close();
+        if (_socket) _socket->close();
     }
 
     bool WebSocketTransport::wakeUpFromPoll(uint64_t wakeUpCode)
     {
         std::lock_guard<std::mutex> lock(_socketMutex);
-        return _socket->wakeUpFromPoll(wakeUpCode);
+        return _socket ? _socket->wakeUpFromPoll(wakeUpCode) : false;
     }
 
     void WebSocketTransport::closeSocketAndSwitchToClosedState(uint16_t code,
@@ -1328,7 +1343,7 @@ namespace ix
     size_t WebSocketTransport::bufferedAmount() const
     {
         std::lock_guard<std::mutex> lock(_txbufMutex);
-        return _txbuf.size();
+        return _txbuf.size() - _txbufOffset;
     }
 
     bool WebSocketTransport::flushSendBuffer()
